@@ -18,6 +18,10 @@
     <PublishReadyToRun>true</PublishReadyToRun>
   </PropertyGroup>
   <ItemGroup>
+    <AppxManifest Include="Package.appxmanifest" />
+    <Content Include="Assets\*.png" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectCapability Include="AppContainerClient" />
     <ProjectCapability Include="AppContainerSupport" />
     <ProjectReference Include="../../src/ClipPlayer.App/ClipPlayer.App.csproj" />
