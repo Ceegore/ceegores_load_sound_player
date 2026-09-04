@@ -29,6 +29,7 @@ public sealed class SwitchablePcmProvider : IWaveProvider, IDisposable
     public WaveFormat WaveFormat { get; }
     public AudioFormat Format => _format;
     public bool HasAudio => Volatile.Read(ref _slot) is not null;
+    public bool CanSeek => Volatile.Read(ref _slot)?.Audio is not null;
     public TimeSpan Position => Volatile.Read(ref _slot) is { } slot && slot.Stream is { } stream
         ? stream.Position
         : Volatile.Read(ref _slot) is { } pcm

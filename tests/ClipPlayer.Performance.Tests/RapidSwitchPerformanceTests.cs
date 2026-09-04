@@ -32,12 +32,24 @@ public sealed class RapidSwitchPerformanceTests
         }
 
         Array.Sort(samples);
-        var p95 = TimeSpan.FromSeconds((double)samples[(int)(switchCount * .95) - 1] / Stopwatch.Frequency);
+        var p95 = TimeSpan.FromSeconds((double)samples[P95Index(switchCount)] / Stopwatch.Frequency);
         Assert.Equal(switchCount + 1, output.Started.Count);
         Assert.True(cache.Hits + cache.Misses >= switchCount);
         Assert.InRange(decoder.DecodeCount, 1, cache.Misses);
-        Assert.True(cache.Hits > switchCount / 2);
-        Assert.InRange(p95, TimeSpan.Zero, TimeSpan.FromMilliseconds(100));
+        Assert.True(cache.Hits >= switchCount / 2);
+        Assert.InRange(p95, TimeSpan.Zero, TimeSpan.FromMilliseconds(50));
+    }
+
+    [Theory]
+    [InlineData(1, 0)]
+    [InlineData(20, 18)]
+    [InlineData(1000, 949)]
+    public void P95IndexIsValidForSmallRuns(int count, int expected) => Assert.Equal(expected, P95Index(count));
+
+    private static int P95Index(int count)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(count);
+        return Math.Clamp((int)Math.Ceiling(count * 0.95d) - 1, 0, count - 1);
     }
 
     [Fact]

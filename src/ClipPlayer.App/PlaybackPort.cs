@@ -1,4 +1,5 @@
 using System.Windows.Media;
+using ClipPlayer.Core;
 
 namespace ClipPlayer.App;
 
@@ -8,6 +9,7 @@ public interface IPlaybackPort : IAsyncDisposable
     TimeSpan Position { get; }
     TimeSpan Duration { get; }
     bool IsPlaying { get; }
+    bool CanSeek => true;
     double Volume { get; set; }
     Task PlayAsync(string path, CancellationToken cancellationToken);
     Task PauseAsync(CancellationToken cancellationToken);
@@ -15,6 +17,11 @@ public interface IPlaybackPort : IAsyncDisposable
     Task StopAsync(CancellationToken cancellationToken);
     Task SeekAsync(TimeSpan position, CancellationToken cancellationToken);
     Task PreloadAsync(IReadOnlyList<string> paths, CancellationToken cancellationToken);
+}
+
+public interface IPlaybackStateSource
+{
+    event EventHandler<PlaybackSnapshot>? PlaybackChanged;
 }
 
 /// <summary>

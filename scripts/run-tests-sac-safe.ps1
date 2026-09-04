@@ -65,6 +65,7 @@ function Resolve-TestTarget([string]$testFilter) {
     if ($testFilter -match 'ClipPlayer\.Audio\.Windows\.Tests') { return 'tests/ClipPlayer.Audio.Windows.Tests/ClipPlayer.Audio.Windows.Tests.csproj' }
     if ($testFilter -match 'ClipPlayer\.Core\.Tests') { return 'tests/ClipPlayer.Core.Tests/ClipPlayer.Core.Tests.csproj' }
     if ($testFilter -match 'ClipPlayer\.App\.Tests') { return 'tests/ClipPlayer.App.Tests/ClipPlayer.App.Tests.csproj' }
+    if ($testFilter -match 'ClipPlayer\.Performance\.Tests') { return 'tests/ClipPlayer.Performance.Tests/ClipPlayer.Performance.Tests.csproj' }
     return $solutionPath
 }
 

@@ -11,7 +11,7 @@ public interface IStreamingAudioDecoder
     ValueTask<ClipPlayer.Core.IStreamingAudio> OpenStreamingAsync(AudioDecodeRequest request, CancellationToken cancellationToken = default);
 }
 
-public sealed class DecoderRegistry(IEnumerable<IAudioDecoder> decoders)
+public sealed class DecoderRegistry(IEnumerable<IAudioDecoder> decoders) : IAudioDecoder
 {
     private readonly IReadOnlyList<IAudioDecoder> _decoders = decoders.ToArray();
 
@@ -24,4 +24,6 @@ public sealed class DecoderRegistry(IEnumerable<IAudioDecoder> decoders)
 
     public ValueTask<PcmAudio> DecodeAsync(AudioDecodeRequest request, CancellationToken cancellationToken = default) =>
         Resolve(request.Track.FullPath).DecodeAsync(request, cancellationToken);
+
+    public bool CanDecode(string extension) => _decoders.Any(decoder => decoder.CanDecode(extension));
 }

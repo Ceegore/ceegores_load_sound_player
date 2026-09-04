@@ -18,6 +18,7 @@ public sealed class StreamingPcmAudioSource : IStreamingAudio
     private int _consumedSamples;
     private volatile bool _completed;
     private bool _disposed;
+    private const int MinimumPrimeSamples = 4_096;
 
     private StreamingPcmAudioSource(WaveStream reader, ISampleProvider samples)
     {
@@ -36,6 +37,7 @@ public sealed class StreamingPcmAudioSource : IStreamingAudio
     public TimeSpan Duration { get; }
     public TimeSpan Position => TimeSpan.FromSeconds((double)Volatile.Read(ref _consumedSamples) / Channels / SampleRate);
     public bool IsCompleted => _completed && _ring.AvailableSamples == 0;
+    public Exception? Failure { get; private set; }
 
     public static StreamingPcmAudioSource OpenWave(AudioDecodeRequest request)
     {
@@ -59,12 +61,12 @@ public sealed class StreamingPcmAudioSource : IStreamingAudio
         catch { reader.Dispose(); throw; }
     }
 
-    public ValueTask PrimeAsync(CancellationToken cancellationToken)
+    public async ValueTask PrimeAsync(CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         lock (_startGate) _worker ??= Task.Run(DecodeLoopAsync, CancellationToken.None);
-        cancellationToken.ThrowIfCancellationRequested();
-        return ValueTask.CompletedTask;
+        await _primed.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        if (Failure is not null) throw new InvalidDataException("Streaming-Decoder konnte keinen Puffer erzeugen.", Failure);
     }
 
     public int Read(Span<float> destination)
@@ -91,14 +93,20 @@ public sealed class StreamingPcmAudioSource : IStreamingAudio
                 {
                     written += _ring.Write(rented.AsSpan(written, read - written));
                     if (written < read) await Task.Delay(1, _cancellation.Token).ConfigureAwait(false);
-                    if (!_primed.Task.IsCompleted) _primed.TrySetResult(true);
+                    if (_ring.AvailableSamples >= MinimumPrimeSamples && !_primed.Task.IsCompleted)
+                        _primed.TrySetResult(true);
                 }
             }
             _completed = true;
             if (!_primed.Task.IsCompleted) _primed.TrySetResult(true);
         }
         catch (OperationCanceledException) when (_cancellation.IsCancellationRequested) { _primed.TrySetCanceled(_cancellation.Token); }
-        catch (Exception exception) { _completed = true; _primed.TrySetException(exception); }
+        catch (Exception exception)
+        {
+            Failure = exception;
+            _completed = true;
+            _primed.TrySetException(exception);
+        }
         finally { ArrayPool<float>.Shared.Return(rented); }
     }
 

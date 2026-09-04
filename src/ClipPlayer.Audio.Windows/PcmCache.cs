@@ -110,9 +110,17 @@ public sealed class PcmCache : IDisposable
                 if (isCurrent is not null && !isCurrent(generation)) return;
                 var key = keys[index - currentIndex];
                 if (TryGet(key, out _)) continue;
-                var audio = await decoder.DecodeAsync(new AudioDecodeRequest(tracks[index], format), cancellationToken)
-                    .ConfigureAwait(false);
-                if (isCurrent is null || isCurrent(generation)) Put(key, audio);
+                try
+                {
+                    var audio = await decoder.DecodeAsync(new AudioDecodeRequest(tracks[index], format), cancellationToken)
+                        .ConfigureAwait(false);
+                    if (audio.Format == format && (isCurrent is null || isCurrent(generation))) Put(key, audio);
+                }
+                catch (PcmClipTooLargeException)
+                {
+                    // A large successor is intentionally serviced by the streaming decoder
+                    // when selected; continue warming the remaining bounded window.
+                }
             }
         }
         finally { _decoderWorker.Release(); }

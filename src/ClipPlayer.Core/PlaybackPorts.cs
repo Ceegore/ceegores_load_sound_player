@@ -27,6 +27,7 @@ public interface IStreamingAudio : IAsyncDisposable
     TimeSpan Duration { get; }
     TimeSpan Position { get; }
     bool IsCompleted { get; }
+    Exception? Failure { get; }
     ValueTask PrimeAsync(CancellationToken cancellationToken);
     int Read(Span<float> destination);
 }
@@ -41,6 +42,13 @@ public interface ITrackCache
     ValueTask<DecodedAudio?> TryGetAsync(Track track, CancellationToken cancellationToken);
     ValueTask PutAsync(Track track, DecodedAudio audio, CancellationToken cancellationToken);
     ValueTask InvalidateAsync(Track track, CancellationToken cancellationToken);
+}
+
+/// <summary>Optional platform cache hook for an atomic current+look-ahead preload window.</summary>
+public interface ITrackPreloadCache : ITrackCache
+{
+    ValueTask PreloadAsync(IReadOnlyList<Track> tracks, int currentIndex, long generation,
+        Func<long, bool>? isCurrent = null, CancellationToken cancellationToken = default);
 }
 
 public interface IAudioOutput

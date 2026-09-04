@@ -1,4 +1,5 @@
 using ClipPlayer.App;
+using ClipPlayer.Core;
 
 namespace ClipPlayer.App.Tests;
 
@@ -70,6 +71,36 @@ public sealed class MainViewModelTests
         Assert.Equal(TimeSpan.Zero, port.Position);
     }
 
+    [Fact]
+    public async Task FiftyRapidNextKeysSettleOnLastItem()
+    {
+        using var files = new TempFiles("a.wav", "b.wav", "c.wav", "d.wav");
+        var player = new DelayedPlaybackPort();
+        await using var model = new MainViewModel(player);
+        await model.SetItemsAsync(files.Paths, 0);
+
+        for (var i = 0; i < 50; i++) model.NextCommand.Execute(null);
+        await Task.Delay(500);
+
+        Assert.True(model.SelectedIndex == 3, $"index={model.SelectedIndex}, calls={player.PlayCalls}, status={model.Status}");
+        Assert.Equal(files.Paths[3], player.CurrentPath);
+    }
+
+    [Fact]
+    public async Task PlaybackEndedSnapshotUpdatesSelectionAndStatus()
+    {
+        using var files = new TempFiles("a.wav", "b.wav");
+        var player = new FakePlaybackPort();
+        await using var model = new MainViewModel(player);
+        await model.SetItemsAsync(files.Paths, 0);
+
+        player.Publish(new PlaybackSnapshot(PlaybackState.Stopped,
+            Track.Create(files.Paths[1]), 1, SelectionGeneration.Initial, TimeSpan.Zero, null));
+
+        Assert.Equal(1, model.SelectedIndex);
+        Assert.Contains("b.wav", model.Status);
+    }
+
     private static readonly string[] ExpectedNames = ["clip1.flac", "clip2.mp3", "clip10.wav"];
 
     private sealed class TempFiles : IDisposable
@@ -85,21 +116,36 @@ public sealed class MainViewModelTests
         public void Dispose() => Directory.Delete(_folder, true);
     }
 
-    private sealed class FakePlaybackPort : IPlaybackPort
+    private class FakePlaybackPort : IPlaybackPort, IPlaybackStateSource
     {
-        public string? CurrentPath { get; private set; }
+        public event EventHandler<PlaybackSnapshot>? PlaybackChanged;
+        public string? CurrentPath { get; protected set; }
         public List<string> Preloaded { get; } = [];
         public TimeSpan Position { get; set; }
         public TimeSpan Duration { get; set; } = TimeSpan.FromSeconds(10);
-        public bool IsPlaying { get; private set; }
+        public bool IsPlaying { get; protected set; }
         public double Volume { get; set; } = 1;
-        public Task PlayAsync(string path, CancellationToken cancellationToken) { CurrentPath = path; IsPlaying = true; return Task.CompletedTask; }
+        public virtual Task PlayAsync(string path, CancellationToken cancellationToken) { CurrentPath = path; IsPlaying = true; return Task.CompletedTask; }
         public Task PauseAsync(CancellationToken cancellationToken) { IsPlaying = false; return Task.CompletedTask; }
         public Task ResumeAsync(CancellationToken cancellationToken) { IsPlaying = true; return Task.CompletedTask; }
         public Task StopAsync(CancellationToken cancellationToken) { IsPlaying = false; return Task.CompletedTask; }
         public Task SeekAsync(TimeSpan position, CancellationToken cancellationToken) { Position = position; return Task.CompletedTask; }
         public Task PreloadAsync(IReadOnlyList<string> paths, CancellationToken cancellationToken) { Preloaded.AddRange(paths); return Task.CompletedTask; }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public void Publish(PlaybackSnapshot snapshot) => PlaybackChanged?.Invoke(this, snapshot);
+    }
+
+    private sealed class DelayedPlaybackPort : FakePlaybackPort
+    {
+        private int _playCalls;
+        public override Task PlayAsync(string path, CancellationToken cancellationToken)
+        {
+            CurrentPath = path;
+            IsPlaying = true;
+            Interlocked.Increment(ref _playCalls);
+            return Task.Delay(5, cancellationToken);
+        }
+        public int PlayCalls => Volatile.Read(ref _playCalls);
     }
 
     private sealed class FakeRecycleBin : IRecycleBin { public string? LastPath { get; private set; } public void SendToRecycleBin(string path) => LastPath = path; }

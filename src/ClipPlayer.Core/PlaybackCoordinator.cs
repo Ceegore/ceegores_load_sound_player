@@ -12,6 +12,8 @@ public sealed class PlaybackCoordinator : IAsyncDisposable
     private readonly IRecycleBin? _recycleBin;
     private readonly PlaybackCommandQueue _commands = new();
     private readonly SemaphoreSlim _decodeGate = new(1, 1);
+    private readonly object _preloadGate = new();
+    private readonly List<Task> _preloads = [];
     private Playlist _playlist = Playlist.Empty;
     private PlaybackSnapshot _snapshot = PlaybackSnapshot.Empty;
     private CancellationTokenSource _selectionCancellation = new();
@@ -37,11 +39,19 @@ public sealed class PlaybackCoordinator : IAsyncDisposable
         _playlist.Count == 0 ? SetEmptyAsync(cancellationToken) : SelectAsync(0, cancellationToken);
 
     public async ValueTask ReplacePlaylistAsync(IEnumerable<Track> tracks, CancellationToken cancellationToken = default)
+        => await ReplacePlaylistAsync(tracks, 0, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>Replaces the list and atomically starts the requested initial track once.</summary>
+    public async ValueTask ReplacePlaylistAsync(IEnumerable<Track> tracks, int initialIndex,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(tracks);
-        var replacement = new Playlist(tracks);
+        var replacementTracks = tracks.ToArray();
+        var replacement = new Playlist(replacementTracks,
+            replacementTracks.Length == 0 || initialIndex < 0 ? -1 : initialIndex);
         await _commands.EnqueueAsync(() => ReplaceCoreAsync(replacement)).ConfigureAwait(false);
-        if (replacement.Count > 0) await SelectAsync(0, cancellationToken).ConfigureAwait(false);
+        if (replacement.Count > 0 && initialIndex >= 0)
+            await SelectAsync(initialIndex, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask SelectAsync(int index, CancellationToken cancellationToken = default)
@@ -65,7 +75,7 @@ public sealed class PlaybackCoordinator : IAsyncDisposable
         var accepted = await _commands.EnqueueAsync(() => CompleteSelectionAsync(request, audio, failure)).ConfigureAwait(false);
         if (accepted && failure is null && audio is not null)
         {
-            _ = PreloadAheadAsync(request);
+            QueuePreload(request);
         }
     }
 
@@ -247,6 +257,14 @@ public sealed class PlaybackCoordinator : IAsyncDisposable
     {
         try
         {
+            if (_cache is ITrackPreloadCache windowCache)
+            {
+                var current = _playlist.CurrentIndex;
+                await windowCache.PreloadAsync(_playlist.ToArray(), current,
+                    request.Generation.Value, generation => generation == request.Generation.Value,
+                    request.CancellationToken).ConfigureAwait(false);
+                return;
+            }
             for (var offset = 1; offset <= 3; offset++)
             {
                 var index = request.Track == _playlist.Current ? _playlist.CurrentIndex + offset : -1;
@@ -256,6 +274,16 @@ public sealed class PlaybackCoordinator : IAsyncDisposable
         }
         catch (OperationCanceledException) when (request.CancellationToken.IsCancellationRequested) { }
         catch { /* Preload failures are surfaced when the track is selected. */ }
+    }
+
+    private void QueuePreload(SelectionRequest request)
+    {
+        var task = PreloadAheadAsync(request);
+        lock (_preloadGate)
+        {
+            _preloads.RemoveAll(static candidate => candidate.IsCompleted);
+            _preloads.Add(task);
+        }
     }
 
     private void CancelActiveSelection()
@@ -288,6 +316,10 @@ public sealed class PlaybackCoordinator : IAsyncDisposable
         _disposed = true;
         CancelActiveSelection();
         await _commands.DisposeAsync().ConfigureAwait(false);
+        Task[] preloads;
+        lock (_preloadGate) preloads = _preloads.ToArray();
+        try { await Task.WhenAll(preloads).ConfigureAwait(false); }
+        catch { /* individual preload failures never invalidate the active track */ }
         _decodeGate.Dispose();
     }
 

@@ -32,8 +32,18 @@ public sealed class WindowsTrackDecoder : ITrackDecoder
         catch (PcmClipTooLargeException)
         {
             if (_registry.Resolve(track.FullPath) is not IStreamingAudioDecoder streaming) throw;
-            var stream = await streaming.OpenStreamingAsync(request, cancellationToken).ConfigureAwait(false);
-            return new DecodedAudio(ReadOnlyMemory<float>.Empty, stream.SampleRate, stream.Channels, stream);
+            IStreamingAudio? stream = null;
+            try
+            {
+                stream = await streaming.OpenStreamingAsync(request, cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                return new DecodedAudio(ReadOnlyMemory<float>.Empty, stream.SampleRate, stream.Channels, stream);
+            }
+            catch
+            {
+                if (stream is not null) await stream.DisposeAsync().ConfigureAwait(false);
+                throw;
+            }
         }
     }
 
@@ -41,8 +51,9 @@ public sealed class WindowsTrackDecoder : ITrackDecoder
         new(track.Path, track.LengthBytes, track.LastWriteTimeUtc.UtcDateTime);
 }
 
-public sealed class WindowsPcmCache(PcmCache cache, AudioFormat mixFormat) : ITrackCache
+public sealed class WindowsPcmCache(PcmCache cache, AudioFormat mixFormat, DecoderRegistry registry) : ITrackPreloadCache
 {
+    private readonly DecoderRegistry _registry = registry ?? throw new ArgumentNullException(nameof(registry));
     public ValueTask<DecodedAudio?> TryGetAsync(Track track, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -57,9 +68,33 @@ public sealed class WindowsPcmCache(PcmCache cache, AudioFormat mixFormat) : ITr
     {
         cancellationToken.ThrowIfCancellationRequested();
         var format = new AudioFormat(audio.SampleRate, audio.Channels);
-        cache.Put(CacheKey.For(ToLocal(track), format), new PcmAudio(format, audio.Samples.ToArray()));
+        if (format != mixFormat) throw new ArgumentException("PCM muss dem festen Mixformat entsprechen.", nameof(audio));
+        cache.Put(CacheKey.For(ToLocal(track), mixFormat), new PcmAudio(format, audio.Samples));
         return ValueTask.CompletedTask;
     }
+
+    public ValueTask PreloadAsync(IReadOnlyList<Track> tracks, int currentIndex, long generation,
+        Func<long, bool>? isCurrent = null, CancellationToken cancellationToken = default)
+    {
+        var local = tracks.Select(ToLocal).ToArray();
+        return PreloadCoreAsync(local, currentIndex, generation, isCurrent, cancellationToken);
+    }
+
+    private async ValueTask PreloadCoreAsync(IReadOnlyList<AudioTrack> tracks, int currentIndex, long generation,
+        Func<long, bool>? isCurrent, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await cache.PreloadAsync(tracks, currentIndex, mixFormat, generation, isCurrent, _registry, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (PcmClipTooLargeException)
+        {
+            // Oversized clips deliberately use the streaming path and are never retained as PCM blobs.
+        }
+    }
+
+    public void Clear() => cache.Clear();
 
     public ValueTask InvalidateAsync(Track track, CancellationToken cancellationToken)
     {

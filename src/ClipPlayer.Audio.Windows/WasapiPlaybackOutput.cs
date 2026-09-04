@@ -1,4 +1,5 @@
 using NAudio.CoreAudioApi;
+using NAudio.CoreAudioApi.Interfaces;
 using NAudio.Wave;
 
 namespace ClipPlayer.Audio.Windows;
@@ -8,9 +9,13 @@ public sealed class WasapiPlaybackOutput : IStreamingAudioOutput
 {
     private readonly int _latencyMilliseconds;
     private readonly SwitchablePcmProvider _provider;
+    private readonly MMDeviceEnumerator _deviceEnumerator;
+    private readonly IMMNotificationClient _notificationClient;
     private WasapiOut? _output;
     private float _volume = 1;
     private ClipPlayer.Core.IStreamingAudio? _activeStream;
+    private int _ignoreStopped;
+    private int _trackEndedRaised;
     private bool _disposed;
 
     public WasapiPlaybackOutput(AudioFormat format, int latencyMilliseconds = 150)
@@ -20,19 +25,26 @@ public sealed class WasapiPlaybackOutput : IStreamingAudioOutput
         Format = format;
         _latencyMilliseconds = latencyMilliseconds;
         _provider = new SwitchablePcmProvider(format);
+        _deviceEnumerator = new MMDeviceEnumerator();
+        _notificationClient = new DefaultDeviceNotification(this);
+        _deviceEnumerator.RegisterEndpointNotificationCallback(_notificationClient);
     }
 
     public AudioFormat Format { get; }
     public bool IsPlaying => _output?.PlaybackState == PlaybackState.Playing;
+    public bool CanSeek => _provider.CanSeek;
     public TimeSpan Position => _provider.Position;
     public TimeSpan Duration => _provider.Duration;
     public double Volume { get => _output?.Volume ?? _volume; set { _volume = (float)Math.Clamp(value, 0, 1); if (_output is not null) _output.Volume = _volume; } }
     public event EventHandler? TrackEnded;
+    public event EventHandler? DeviceChanged;
 
     public void SwitchTo(PcmAudio? audio, TimeSpan startAt = default)
     {
         ThrowIfDisposed();
         DisposeActiveStream();
+        Volatile.Write(ref _ignoreStopped, 0);
+        Volatile.Write(ref _trackEndedRaised, 0);
         _provider.SwitchTo(audio, startAt);
     }
 
@@ -46,6 +58,8 @@ public sealed class WasapiPlaybackOutput : IStreamingAudioOutput
         var previous = Interlocked.Exchange(ref _activeStream, audio);
         if (previous is not null && !ReferenceEquals(previous, audio)) await previous.DisposeAsync().ConfigureAwait(false);
         _provider.SwitchToStreaming(audio, startAt);
+        Volatile.Write(ref _ignoreStopped, 0);
+        Volatile.Write(ref _trackEndedRaised, 0);
         Play();
     }
 
@@ -65,8 +79,9 @@ public sealed class WasapiPlaybackOutput : IStreamingAudioOutput
     public void StopPlayback()
     {
         ThrowIfDisposed();
-        _output?.Stop();
-        DisposeActiveStream();
+        Interlocked.Exchange(ref _ignoreStopped, 1);
+        try { _output?.Stop(); }
+        finally { DisposeActiveStream(); }
     }
 
     public void Seek(TimeSpan position)
@@ -96,7 +111,21 @@ public sealed class WasapiPlaybackOutput : IStreamingAudioOutput
 
     private void OnPlaybackStopped(object? sender, StoppedEventArgs e)
     {
-        if (_provider.EndOfStream) TrackEnded?.Invoke(this, EventArgs.Empty);
+        if (Volatile.Read(ref _ignoreStopped) == 0 && _provider.EndOfStream &&
+            Interlocked.Exchange(ref _trackEndedRaised, 1) == 0)
+            TrackEnded?.Invoke(this, EventArgs.Empty);
+    }
+
+    private sealed class DefaultDeviceNotification(WasapiPlaybackOutput owner) : IMMNotificationClient
+    {
+        public void OnDeviceStateChanged(string deviceId, DeviceState newState) { }
+        public void OnDeviceAdded(string pwstrDeviceId) { }
+        public void OnDeviceRemoved(string deviceId) { }
+        public void OnDefaultDeviceChanged(DataFlow flow, Role role, string defaultDeviceId)
+        {
+            if (flow == DataFlow.Render) owner.DeviceChanged?.Invoke(owner, EventArgs.Empty);
+        }
+        public void OnPropertyValueChanged(string pwstrDeviceId, PropertyKey key) { }
     }
 
     private void ThrowIfDisposed() { ObjectDisposedException.ThrowIf(_disposed, this); }
@@ -116,6 +145,8 @@ public sealed class WasapiPlaybackOutput : IStreamingAudioOutput
         DisposeActiveStream();
         if (_output is not null) _output.PlaybackStopped -= OnPlaybackStopped;
         _output?.Dispose();
+        _deviceEnumerator.UnregisterEndpointNotificationCallback(_notificationClient);
+        _deviceEnumerator.Dispose();
         _provider.Dispose();
     }
 }

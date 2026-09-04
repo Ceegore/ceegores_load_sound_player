@@ -20,7 +20,7 @@
     <DockPanel Grid.Row="2" Margin="0,12,0,0">
       <TextBlock DockPanel.Dock="Left" Text="{Binding PositionText}" Width="48" VerticalAlignment="Center" />
       <TextBlock DockPanel.Dock="Right" Text="{Binding DurationText}" Width="48" TextAlignment="Right" VerticalAlignment="Center" />
-      <Slider x:Name="PositionSlider" Minimum="0" Maximum="1" Value="{Binding PositionRatio, Mode=OneWay}"
+      <Slider x:Name="PositionSlider" Minimum="0" Maximum="1" IsEnabled="{Binding CanSeek}" Value="{Binding PositionRatio, Mode=OneWay}"
               PreviewMouseUp="OnPositionReleased" AutomationProperties.Name="Position" />
     </DockPanel>
     <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,8">

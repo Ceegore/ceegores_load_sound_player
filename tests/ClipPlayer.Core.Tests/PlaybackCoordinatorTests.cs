@@ -15,6 +15,17 @@ public sealed class PlaybackCoordinatorTests
     }
 
     [Fact]
+    public async Task ReplacePlaylistStartsRequestedInitialTrackExactlyOnce()
+    {
+        var output = new RecordingOutput();
+        await using var coordinator = new PlaybackCoordinator(new RecordingDecoder(), output);
+        await coordinator.ReplacePlaylistAsync([CoreFixtures.Track("one"), CoreFixtures.Track("two")], 1);
+        Assert.Single(output.Started);
+        Assert.Equal("two.wav", output.Started[0].FileName);
+        Assert.Equal(1, coordinator.Snapshot.CurrentIndex);
+    }
+
+    [Fact]
     public async Task PreviousAndNextAutoplayAndDoNotWrap()
     {
         var output = new RecordingOutput();
@@ -180,6 +191,7 @@ public sealed class PlaybackCoordinatorTests
         public TimeSpan Duration => TimeSpan.FromSeconds(1);
         public TimeSpan Position => TimeSpan.Zero;
         public bool IsCompleted => false;
+        public Exception? Failure => null;
         public ValueTask PrimeAsync(CancellationToken cancellationToken)
         {
             _started?.Invoke();

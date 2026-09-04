@@ -4,6 +4,8 @@ using System.Globalization;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
+using System.Windows;
+using ClipPlayer.Core;
 
 namespace ClipPlayer.App;
 
@@ -31,11 +33,13 @@ public sealed class MainViewModel : INotifyPropertyChanged, IAsyncDisposable
         _recycleBin = recycleBin ?? new WindowsRecycleBin();
         _confirmation = confirmation ?? new MessageBoxConfirmation();
         OpenCommand = new AsyncCommand(OpenAsync);
-        PreviousCommand = new AsyncCommand(() => SelectRelativeAsync(-1), () => SelectedIndex > 0 && !IsBusy);
-        NextCommand = new AsyncCommand(() => SelectRelativeAsync(1), () => SelectedIndex >= 0 && SelectedIndex < Items.Count - 1 && !IsBusy);
+        PreviousCommand = new AsyncCommand(() => SelectRelativeAsync(-1), () => SelectedIndex > 0);
+        NextCommand = new AsyncCommand(() => SelectRelativeAsync(1), () => SelectedIndex >= 0 && SelectedIndex < Items.Count - 1);
         TogglePauseCommand = new AsyncCommand(TogglePauseAsync);
         DeleteCommand = new AsyncCommand(DeleteAsync);
         _player.Volume = _volume;
+        if (_player is IPlaybackStateSource stateSource)
+            stateSource.PlaybackChanged += OnPlaybackChanged;
     }
 
     public ObservableCollection<ClipItem> Items { get; } = [];
@@ -47,6 +51,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IAsyncDisposable
     public double Volume { get => _volume; set { if (Set(ref _volume, Math.Clamp(value, 0, 1))) _player.Volume = _volume; } }
     public TimeSpan Position { get => _position; private set => Set(ref _position, value); }
     public TimeSpan Duration { get => _duration; private set => Set(ref _duration, value); }
+    public bool CanSeek => _player.CanSeek;
     public double PositionRatio => Duration > TimeSpan.Zero ? Math.Clamp(Position.TotalSeconds / Duration.TotalSeconds, 0, 1) : 0;
     public string PositionText => FormatTime(Position);
     public string DurationText => FormatTime(Duration);
@@ -76,9 +81,21 @@ public sealed class MainViewModel : INotifyPropertyChanged, IAsyncDisposable
         foreach (var item in valid) Items.Add(item);
         RefreshNavigationCommands();
         if (Items.Count == 0) { SelectedIndex = -1; Status = "Keine unterstützten Dateien"; return; }
+        var targetIndex = Math.Clamp(selectedIndex, 0, Items.Count - 1);
         if (_player is IPlaylistPlaybackPort playlist)
-            await playlist.SetPlaylistAsync(Items.Select(item => item.Path).ToArray(), CancellationToken.None).ConfigureAwait(true);
-        await SelectAsync(Math.Clamp(selectedIndex, 0, Items.Count - 1)).ConfigureAwait(true);
+        {
+            SelectedIndex = targetIndex;
+            await playlist.SetPlaylistAsync(Items.Select(item => item.Path).ToArray(), targetIndex,
+                CancellationToken.None).ConfigureAwait(true);
+            if (playlist.HandlesSelectionAtomically)
+            {
+                Duration = _player.Duration;
+                Position = _player.Position;
+                Status = SelectedItem?.Name ?? "";
+                return;
+            }
+        }
+        await SelectAsync(targetIndex).ConfigureAwait(true);
     }
 
     public async Task SelectRelativeAsync(int offset)
@@ -93,6 +110,11 @@ public sealed class MainViewModel : INotifyPropertyChanged, IAsyncDisposable
     public async Task SeekToRatioAsync(double ratio)
     {
         if (Duration <= TimeSpan.Zero || SelectedItem is null) return;
+        if (!_player.CanSeek)
+        {
+            Status = "Seek ist für sehr große Streaming-Dateien nicht verfügbar.";
+            return;
+        }
         try
         {
             await _player.SeekAsync(TimeSpan.FromSeconds(Math.Clamp(ratio, 0, 1) * Duration.TotalSeconds), CancellationToken.None).ConfigureAwait(true);
@@ -122,6 +144,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IAsyncDisposable
             Position = _player.Position;
             OnPropertyChanged(nameof(PositionText));
             OnPropertyChanged(nameof(DurationText));
+            OnPropertyChanged(nameof(CanSeek));
             OnPropertyChanged(nameof(PositionRatio));
             Status = item.Name;
             _ = PreloadNextAsync(generation, token);
@@ -171,9 +194,19 @@ public sealed class MainViewModel : INotifyPropertyChanged, IAsyncDisposable
             _recycleBin.SendToRecycleBin(item.Path);
             Items.RemoveAt(oldIndex);
             if (Items.Count == 0) { SelectedIndex = -1; Status = "Keine Datei geöffnet"; return; }
+            var targetIndex = Math.Min(oldIndex, Items.Count - 1);
             if (_player is IPlaylistPlaybackPort playlist)
-                await playlist.SetPlaylistAsync(Items.Select(current => current.Path).ToArray(), CancellationToken.None).ConfigureAwait(true);
-            await SelectAsync(Math.Min(oldIndex, Items.Count - 1)).ConfigureAwait(true);
+            {
+                SelectedIndex = targetIndex;
+                await playlist.SetPlaylistAsync(Items.Select(current => current.Path).ToArray(), targetIndex,
+                    CancellationToken.None).ConfigureAwait(true);
+                if (playlist.HandlesSelectionAtomically)
+                {
+                    Status = SelectedItem?.Name ?? "";
+                    return;
+                }
+            }
+            await SelectAsync(targetIndex).ConfigureAwait(true);
         }
         catch (Exception ex) { Status = $"Löschen fehlgeschlagen: {ex.Message}"; }
     }
@@ -191,9 +224,39 @@ public sealed class MainViewModel : INotifyPropertyChanged, IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _selectionCancellation.Cancel();
+        if (_player is IPlaybackStateSource stateSource)
+            stateSource.PlaybackChanged -= OnPlaybackChanged;
         await _player.DisposeAsync().ConfigureAwait(false);
         _selectionGate.Dispose();
         _selectionCancellation.Dispose();
+    }
+
+    private void OnPlaybackChanged(object? sender, PlaybackSnapshot snapshot)
+    {
+        void Apply()
+        {
+            if (snapshot.CurrentIndex >= 0 && snapshot.CurrentIndex < Items.Count)
+                SelectedIndex = snapshot.CurrentIndex;
+            IsPaused = snapshot.State == PlaybackState.Paused;
+            Position = snapshot.Position;
+            Duration = _player.Duration;
+            OnPropertyChanged(nameof(PositionRatio));
+            OnPropertyChanged(nameof(PositionText));
+            OnPropertyChanged(nameof(DurationText));
+            Status = snapshot.State switch
+            {
+                PlaybackState.Faulted => $"Fehler: {snapshot.Error ?? "Unbekannter Fehler"}",
+                PlaybackState.Paused when SelectedItem is not null => $"Pausiert: {SelectedItem.Name}",
+                PlaybackState.Stopped when SelectedItem is not null => $"Beendet: {SelectedItem.Name}",
+                PlaybackState.Playing when SelectedItem is not null => SelectedItem.Name,
+                PlaybackState.Empty => "Keine Datei geöffnet",
+                _ => Status
+            };
+        }
+
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is not null && !dispatcher.CheckAccess()) dispatcher.BeginInvoke(Apply);
+        else Apply();
     }
 
     private static string FormatTime(TimeSpan value) => value.TotalHours >= 1 ? value.ToString(@"h\:mm\:ss", CultureInfo.InvariantCulture) : value.ToString(@"m\:ss", CultureInfo.InvariantCulture);
@@ -209,15 +272,44 @@ public sealed class MainViewModel : INotifyPropertyChanged, IAsyncDisposable
 public sealed class AsyncCommand(Func<Task> action, Func<bool>? canExecute = null) : ICommand
 {
     private readonly Func<bool> _canExecute = canExecute ?? (() => true);
-    private bool _running;
+    private readonly object _gate = new();
+    private int _running;
+    private int _pending;
     public event EventHandler? CanExecuteChanged;
-    public bool CanExecute(object? parameter) => !_running && _canExecute();
+    public bool CanExecute(object? parameter) => Volatile.Read(ref _running) == 0 && _canExecute();
     public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
-    public async void Execute(object? parameter)
+    public void Execute(object? parameter)
     {
-        if (_running || !_canExecute()) return;
-        _running = true; CanExecuteChanged?.Invoke(this, EventArgs.Empty);
-        try { await action(); } finally { _running = false; CanExecuteChanged?.Invoke(this, EventArgs.Empty); }
+        lock (_gate)
+        {
+            if (_running == 0 && !_canExecute()) return;
+            _pending++;
+            if (_running != 0) return;
+            _running = 1;
+        }
+        CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+        _ = DrainAsync();
+    }
+
+    private async Task DrainAsync()
+    {
+        try
+        {
+            while (true)
+            {
+                lock (_gate)
+                {
+                    if (_pending == 0) { _running = 0; break; }
+                    _pending--;
+                }
+                try { await action(); }
+                catch { /* one stale navigation must not discard later key presses */ }
+            }
+        }
+        finally
+        {
+            CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+        }
     }
     internal Task RunForTestsAsync() => action();
 }
