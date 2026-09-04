@@ -83,7 +83,7 @@ for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
         if ($attempt -lt $MaxAttempts) { Start-Sleep -Seconds (30 * $attempt) }
         continue
     }
-    if ($canary.Timeout) { Write-Error 'Canary-Test überschritt das harte Timeout.'; exit 124 }
+    if ($canary.Timeout) { Write-Output 'Canary-Test überschritt das harte Timeout.'; exit 124 }
     if ($canary.Output -match '(?i)(no test matches|kein test entspricht)') {
         Write-Output 'Canary-Filter passte zu keinem Test.'; exit 3
     }
@@ -98,10 +98,10 @@ for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
         if ($attempt -lt $MaxAttempts) { Start-Sleep -Seconds (30 * $attempt) }
         continue
     }
-    if ($result.Timeout) { Write-Error 'Testlauf überschritt das harte Timeout.'; exit 124 }
+    if ($result.Timeout) { Write-Output 'Testlauf überschritt das harte Timeout.'; exit 124 }
     if (($result.Output -match '(?i)(no test matches|kein test entspricht)') -and
         $result.Output -notmatch '(?im)^\s*(passed|bestanden|failed|fehler)\b') { exit 3 }
     exit ([int]$result.ExitCode)
 }
-Write-Error 'SAC/CodeIntegrity blockiert nach maximal vier Versuchen; Tests sind ein Umgebungs-Nicht-Ergebnis.'
+Write-Output 'SAC/CodeIntegrity blockiert nach maximal vier Versuchen; Tests sind ein Umgebungs-Nicht-Ergebnis.'
 exit 42

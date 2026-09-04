@@ -14,6 +14,8 @@ public sealed class MainViewModelTests
         await model.SetItemsAsync(files.Paths, 0);
 
         Assert.Equal("one.wav", model.SelectedItem!.Name);
+        Assert.False(model.PreviousCommand.CanExecute(null));
+        Assert.True(model.NextCommand.CanExecute(null));
         Assert.Equal(files.Paths[0], player.CurrentPath);
         await Task.Delay(20);
         Assert.Equal(3, player.Preloaded.Count);

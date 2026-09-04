@@ -2,6 +2,11 @@ using NAudio.Wave;
 
 namespace ClipPlayer.Audio.Windows;
 
+internal sealed class PcmClipTooLargeException : Exception
+{
+    public PcmClipTooLargeException() : base("Audio clip überschreitet 128 MiB PCM-Limit.") { }
+}
+
 internal static class DecoderSupport
 {
     public static async ValueTask<PcmAudio> ReadSamplesAsync(
@@ -12,6 +17,8 @@ internal static class DecoderSupport
         if (!format.IsValid) throw new InvalidDataException("Ungültiges Audioformat.");
         const long maxBytes = 128L * 1024 * 1024;
         var maxSamples = maxBytes / sizeof(float);
+        var estimatedBytes = source.TotalTime.TotalSeconds * samples.WaveFormat.AverageBytesPerSecond;
+        if (estimatedBytes > maxBytes) throw new PcmClipTooLargeException();
         var buffer = new float[Math.Min(32_768, maxSamples)];
         var output = new List<float>(Math.Min(buffer.Length, 262_144));
         while (true)
@@ -19,7 +26,7 @@ internal static class DecoderSupport
             cancellationToken.ThrowIfCancellationRequested();
             var read = samples.Read(buffer, 0, buffer.Length);
             if (read == 0) break;
-            if (output.Count + read > maxSamples) throw new InvalidDataException("Audio clip überschreitet 128 MiB PCM-Limit.");
+            if (output.Count + read > maxSamples) throw new PcmClipTooLargeException();
             output.AddRange(buffer.AsSpan(0, read).ToArray());
             await Task.Yield();
         }

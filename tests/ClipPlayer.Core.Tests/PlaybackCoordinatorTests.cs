@@ -116,4 +116,77 @@ public sealed class PlaybackCoordinatorTests
         Assert.Equal([second], output.Started);
         Assert.Equal(second, coordinator.Snapshot.CurrentTrack);
     }
+
+    [Fact]
+    public async Task CanceledStreamingSelectionDisposesItsSource()
+    {
+        var decoder = new StreamingDecoder();
+        var output = new StreamingOutput();
+        await using var coordinator = new PlaybackCoordinator(decoder, output);
+        await coordinator.ReplacePlaylistAsync([CoreFixtures.Track("first"), CoreFixtures.Track("second")]);
+        var first = coordinator.SelectAsync(0).AsTask();
+        await decoder.FirstPrimeStarted.Task;
+        var second = coordinator.SelectAsync(1).AsTask();
+        await Task.WhenAll(first, second);
+
+        Assert.True(decoder.FirstSource.Disposed);
+        Assert.Equal("second.wav", coordinator.Snapshot.CurrentTrack!.FileName);
+    }
+
+    private sealed class StreamingDecoder : ITrackDecoder
+    {
+        public TaskCompletionSource<bool> FirstPrimeStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public StreamingSource FirstSource { get; }
+        private int _calls;
+        public StreamingDecoder() => FirstSource = new(false, () => FirstPrimeStarted.TrySetResult(true));
+        public ValueTask<DecodedAudio> DecodeAsync(Track track, CancellationToken cancellationToken)
+        {
+            var call = Interlocked.Increment(ref _calls);
+            var source = track.FileName == "first.wav" && call > 1 ? FirstSource : new StreamingSource();
+            return ValueTask.FromResult(new DecodedAudio(ReadOnlyMemory<float>.Empty, 8_000, 1, source));
+        }
+    }
+
+    private sealed class StreamingOutput : IStreamingAudioOutput
+    {
+        private IStreamingAudio? _active;
+        public async ValueTask PlayAsync(Track track, DecodedAudio audio, TimeSpan startAt, CancellationToken cancellationToken)
+        {
+            if (audio.Stream is { } stream)
+            {
+                if (_active is not null && !ReferenceEquals(_active, stream)) await _active.DisposeAsync();
+                _active = stream;
+                await stream.PrimeAsync(cancellationToken);
+            }
+        }
+        public async ValueTask PlayStreamingAsync(Track track, IStreamingAudio audio, TimeSpan startAt, CancellationToken cancellationToken)
+        {
+            await audio.PrimeAsync(cancellationToken);
+        }
+        public ValueTask PauseAsync(CancellationToken cancellationToken) => ValueTask.CompletedTask;
+        public ValueTask ResumeAsync(CancellationToken cancellationToken) => ValueTask.CompletedTask;
+        public ValueTask StopAsync(CancellationToken cancellationToken) => ValueTask.CompletedTask;
+    }
+
+    private sealed class StreamingSource : IStreamingAudio
+    {
+        private readonly TaskCompletionSource<bool> _prime = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly bool _waitForPrime;
+        private readonly Action? _started;
+        public StreamingSource(bool waitForPrime = false, Action? started = null) { _waitForPrime = waitForPrime; _started = started; }
+        public bool Disposed { get; private set; }
+        public int SampleRate => 8_000;
+        public int Channels => 1;
+        public TimeSpan Duration => TimeSpan.FromSeconds(1);
+        public TimeSpan Position => TimeSpan.Zero;
+        public bool IsCompleted => false;
+        public ValueTask PrimeAsync(CancellationToken cancellationToken)
+        {
+            _started?.Invoke();
+            if (!_waitForPrime) return ValueTask.CompletedTask;
+            return new(_prime.Task.WaitAsync(cancellationToken));
+        }
+        public int Read(Span<float> destination) => 0;
+        public ValueTask DisposeAsync() { Disposed = true; _prime.TrySetCanceled(); return ValueTask.CompletedTask; }
+    }
 }

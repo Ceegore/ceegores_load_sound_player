@@ -204,7 +204,7 @@ public sealed class PlaybackCoordinator : IAsyncDisposable
 
             if (_decoder is null) throw new InvalidOperationException("Kein Decoder-Port konfiguriert.");
             var decoded = await _decoder.DecodeAsync(track, linked.Token).ConfigureAwait(false);
-            if (_cache is not null) await _cache.PutAsync(track, decoded, linked.Token).ConfigureAwait(false);
+            if (_cache is not null && !decoded.IsStreaming) await _cache.PutAsync(track, decoded, linked.Token).ConfigureAwait(false);
             return decoded;
         }
         finally { _decodeGate.Release(); }
@@ -212,9 +212,14 @@ public sealed class PlaybackCoordinator : IAsyncDisposable
 
     private async ValueTask<bool> CompleteSelectionAsync(SelectionRequest request, DecodedAudio? audio, Exception? failure)
     {
-        if (_snapshot.SelectionGeneration != request.Generation) return false;
+        if (_snapshot.SelectionGeneration != request.Generation)
+        {
+            if (audio?.Stream is { } staleStream) await staleStream.DisposeAsync().ConfigureAwait(false);
+            return false;
+        }
         if (failure is not null)
         {
+            if (audio?.Stream is { } failedStream) await failedStream.DisposeAsync().ConfigureAwait(false);
             SetSnapshot(_snapshot with { State = PlaybackState.Faulted, Error = failure.Message });
             return false;
         }
@@ -225,9 +230,14 @@ public sealed class PlaybackCoordinator : IAsyncDisposable
             SetSnapshot(_snapshot with { State = PlaybackState.Playing, Position = TimeSpan.Zero, Error = null });
             return true;
         }
-        catch (OperationCanceledException) when (request.CancellationToken.IsCancellationRequested) { return false; }
+        catch (OperationCanceledException) when (request.CancellationToken.IsCancellationRequested)
+        {
+            if (audio?.Stream is { } canceledStream) await canceledStream.DisposeAsync().ConfigureAwait(false);
+            return false;
+        }
         catch (Exception exception)
         {
+            if (audio?.Stream is { } failedOutputStream) await failedOutputStream.DisposeAsync().ConfigureAwait(false);
             SetSnapshot(_snapshot with { State = PlaybackState.Faulted, Error = exception.Message });
             return false;
         }

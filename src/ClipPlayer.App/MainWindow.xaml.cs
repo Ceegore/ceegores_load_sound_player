@@ -20,6 +20,8 @@ public partial class MainWindow : Window
 
     private void OnKeyDown(object sender, KeyEventArgs e)
     {
+        if (Keyboard.Modifiers != ModifierKeys.None || e.OriginalSource is System.Windows.Controls.Primitives.TextBoxBase or System.Windows.Controls.Slider)
+            return;
         if (e.Key is Key.Left or Key.Right or Key.Space)
         {
             e.Handled = true;

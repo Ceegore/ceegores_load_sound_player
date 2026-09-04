@@ -23,8 +23,18 @@ public sealed class WindowsTrackDecoder : ITrackDecoder
 
     private async ValueTask<DecodedAudio> DecodeCoreAsync(AudioTrack track, CancellationToken cancellationToken)
     {
-        var audio = await _registry.DecodeAsync(new AudioDecodeRequest(track, _mixFormat), cancellationToken).ConfigureAwait(false);
-        return new DecodedAudio(audio.Samples, audio.Format.SampleRate, audio.Format.Channels);
+        var request = new AudioDecodeRequest(track, _mixFormat);
+        try
+        {
+            var audio = await _registry.DecodeAsync(request, cancellationToken).ConfigureAwait(false);
+            return new DecodedAudio(audio.Samples, audio.Format.SampleRate, audio.Format.Channels);
+        }
+        catch (PcmClipTooLargeException)
+        {
+            if (_registry.Resolve(track.FullPath) is not IStreamingAudioDecoder streaming) throw;
+            var stream = await streaming.OpenStreamingAsync(request, cancellationToken).ConfigureAwait(false);
+            return new DecodedAudio(ReadOnlyMemory<float>.Empty, stream.SampleRate, stream.Channels, stream);
+        }
     }
 
     private static AudioTrack ToLocal(Track track) =>
@@ -64,13 +74,21 @@ public sealed class WindowsPcmCache(PcmCache cache, AudioFormat mixFormat) : ITr
 
 public sealed class CoreAudioOutputAdapter(IAudioOutput output) : ClipPlayer.Core.IAudioOutput
 {
-    public ValueTask PlayAsync(Track track, DecodedAudio audio, TimeSpan startAt, CancellationToken cancellationToken)
+    public async ValueTask PlayAsync(Track track, DecodedAudio audio, TimeSpan startAt, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var format = new AudioFormat(audio.SampleRate, audio.Channels);
-        output.SwitchTo(new PcmAudio(format, audio.Samples), startAt);
-        output.Play();
-        return ValueTask.CompletedTask;
+        if (audio.Stream is { } stream)
+        {
+            if (output is not IStreamingAudioOutput streamingOutput)
+                throw new NotSupportedException("Ausgabegerät unterstützt keinen Streaming-Pfad.");
+            await streamingOutput.PlayStreamingAsync(track, stream, startAt, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            var format = new AudioFormat(audio.SampleRate, audio.Channels);
+            output.SwitchTo(new PcmAudio(format, audio.Samples), startAt);
+            output.Play();
+        }
     }
 
     public ValueTask PauseAsync(CancellationToken cancellationToken)

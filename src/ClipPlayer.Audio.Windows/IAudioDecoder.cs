@@ -6,6 +6,11 @@ public interface IAudioDecoder
     ValueTask<PcmAudio> DecodeAsync(AudioDecodeRequest request, CancellationToken cancellationToken = default);
 }
 
+public interface IStreamingAudioDecoder
+{
+    ValueTask<ClipPlayer.Core.IStreamingAudio> OpenStreamingAsync(AudioDecodeRequest request, CancellationToken cancellationToken = default);
+}
+
 public sealed class DecoderRegistry(IEnumerable<IAudioDecoder> decoders)
 {
     private readonly IReadOnlyList<IAudioDecoder> _decoders = decoders.ToArray();

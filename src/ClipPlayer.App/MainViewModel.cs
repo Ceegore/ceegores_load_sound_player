@@ -31,8 +31,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IAsyncDisposable
         _recycleBin = recycleBin ?? new WindowsRecycleBin();
         _confirmation = confirmation ?? new MessageBoxConfirmation();
         OpenCommand = new AsyncCommand(OpenAsync);
-        PreviousCommand = new AsyncCommand(() => SelectRelativeAsync(-1));
-        NextCommand = new AsyncCommand(() => SelectRelativeAsync(1));
+        PreviousCommand = new AsyncCommand(() => SelectRelativeAsync(-1), () => SelectedIndex > 0 && !IsBusy);
+        NextCommand = new AsyncCommand(() => SelectRelativeAsync(1), () => SelectedIndex >= 0 && SelectedIndex < Items.Count - 1 && !IsBusy);
         TogglePauseCommand = new AsyncCommand(TogglePauseAsync);
         DeleteCommand = new AsyncCommand(DeleteAsync);
         _player.Volume = _volume;
@@ -40,9 +40,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IAsyncDisposable
 
     public ObservableCollection<ClipItem> Items { get; } = [];
     public ClipItem? SelectedItem => _selectedIndex >= 0 && _selectedIndex < Items.Count ? Items[_selectedIndex] : null;
-    public int SelectedIndex { get => _selectedIndex; private set { if (Set(ref _selectedIndex, value)) OnPropertyChanged(nameof(SelectedItem)); } }
+    public int SelectedIndex { get => _selectedIndex; private set { if (Set(ref _selectedIndex, value)) { OnPropertyChanged(nameof(SelectedItem)); RefreshNavigationCommands(); } } }
     public string Status { get => _status; private set => Set(ref _status, value); }
-    public bool IsBusy { get => _isBusy; private set => Set(ref _isBusy, value); }
+    public bool IsBusy { get => _isBusy; private set { if (Set(ref _isBusy, value)) RefreshNavigationCommands(); } }
     public bool IsPaused { get => _isPaused; private set => Set(ref _isPaused, value); }
     public double Volume { get => _volume; set { if (Set(ref _volume, Math.Clamp(value, 0, 1))) _player.Volume = _volume; } }
     public TimeSpan Position { get => _position; private set => Set(ref _position, value); }
@@ -74,6 +74,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IAsyncDisposable
         var valid = paths.Where(AudioFileRules.IsSupported).Where(File.Exists).Select(x => new ClipItem(x)).ToArray();
         Items.Clear();
         foreach (var item in valid) Items.Add(item);
+        RefreshNavigationCommands();
         if (Items.Count == 0) { SelectedIndex = -1; Status = "Keine unterstützten Dateien"; return; }
         if (_player is IPlaylistPlaybackPort playlist)
             await playlist.SetPlaylistAsync(Items.Select(item => item.Path).ToArray(), CancellationToken.None).ConfigureAwait(true);
@@ -154,7 +155,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IAsyncDisposable
         try
         {
             if (IsPaused) { await _player.ResumeAsync(CancellationToken.None); IsPaused = false; Status = SelectedItem.Name; }
-            else { await _player.PauseAsync(CancellationToken.None); IsPaused = true; Status = $"Pausiert: {SelectedItem.Name}"; }
+            else { await _player.PauseAsync(CancellationToken.None); IsPaused = !_player.IsPlaying; Status = IsPaused ? $"Pausiert: {SelectedItem.Name}" : SelectedItem.Name; }
         }
         catch (Exception ex) { Status = $"Fehler: {ex.Message}"; }
     }
@@ -198,16 +199,23 @@ public sealed class MainViewModel : INotifyPropertyChanged, IAsyncDisposable
     private static string FormatTime(TimeSpan value) => value.TotalHours >= 1 ? value.ToString(@"h\:mm\:ss", CultureInfo.InvariantCulture) : value.ToString(@"m\:ss", CultureInfo.InvariantCulture);
     private bool Set<T>(ref T field, T value, [CallerMemberName] string? name = null) { if (EqualityComparer<T>.Default.Equals(field, value)) return false; field = value; OnPropertyChanged(name); return true; }
     private void OnPropertyChanged([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+    private void RefreshNavigationCommands()
+    {
+        (PreviousCommand as AsyncCommand)?.RaiseCanExecuteChanged();
+        (NextCommand as AsyncCommand)?.RaiseCanExecuteChanged();
+    }
 }
 
-public sealed class AsyncCommand(Func<Task> action) : ICommand
+public sealed class AsyncCommand(Func<Task> action, Func<bool>? canExecute = null) : ICommand
 {
+    private readonly Func<bool> _canExecute = canExecute ?? (() => true);
     private bool _running;
     public event EventHandler? CanExecuteChanged;
-    public bool CanExecute(object? parameter) => !_running;
+    public bool CanExecute(object? parameter) => !_running && _canExecute();
+    public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
     public async void Execute(object? parameter)
     {
-        if (_running) return;
+        if (_running || !_canExecute()) return;
         _running = true; CanExecuteChanged?.Invoke(this, EventArgs.Empty);
         try { await action(); } finally { _running = false; CanExecuteChanged?.Invoke(this, EventArgs.Empty); }
     }

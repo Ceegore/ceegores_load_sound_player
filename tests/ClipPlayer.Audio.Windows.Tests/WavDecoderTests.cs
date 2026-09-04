@@ -42,4 +42,47 @@ public sealed class WavDecoderTests
         var request = new AudioDecodeRequest(new AudioTrack("missing.wav", 0, DateTime.UtcNow));
         await Assert.ThrowsAsync<OperationCanceledException>(async () => await new WavDecoder().DecodeAsync(request, cancellation.Token));
     }
+
+    [Fact]
+    public async Task OversizedWaveUsesFiveSecondStreamingSource()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"clipplayer-large-{Guid.NewGuid():N}.wav");
+        try
+        {
+            WriteSparsePcmWave(path, 129 * 1024 * 1024);
+            var registry = new DecoderRegistry([new WavDecoder()]);
+            var decoder = new WindowsTrackDecoder(registry, new AudioFormat(8_000, 1));
+            var decoded = await decoder.DecodeAsync(ClipPlayer.Core.Track.Create(path, new FileInfo(path).Length, File.GetLastWriteTimeUtc(path)), CancellationToken.None);
+
+            Assert.True(decoded.IsStreaming);
+            await decoded.Stream!.PrimeAsync(CancellationToken.None);
+            var samples = new float[128];
+            Assert.Equal(samples.Length, decoded.Stream.Read(samples));
+            await decoded.Stream.DisposeAsync();
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    private static void WriteSparsePcmWave(string path, int dataBytes)
+    {
+        using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
+        using var writer = new BinaryWriter(stream);
+        writer.Write(0x46464952); // RIFF
+        writer.Write(36 + dataBytes);
+        writer.Write(0x45564157); // WAVE
+        writer.Write(0x20746D66); // fmt 
+        writer.Write(16);
+        writer.Write((short)1);
+        writer.Write((short)1);
+        writer.Write(8_000);
+        writer.Write(16_000);
+        writer.Write((short)2);
+        writer.Write((short)16);
+        writer.Write(0x61746164); // data
+        writer.Write(dataBytes);
+        stream.SetLength(44L + dataBytes);
+    }
 }

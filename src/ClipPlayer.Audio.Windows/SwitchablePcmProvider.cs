@@ -1,14 +1,18 @@
 using NAudio.Wave;
+using ClipPlayer.Core;
 
 namespace ClipPlayer.Audio.Windows;
 
 /// <summary>Atomic PCM source swap. Read never touches disk or a decoder.</summary>
 public sealed class SwitchablePcmProvider : IWaveProvider, IDisposable
 {
-    private sealed class Slot(PcmAudio audio)
+    private sealed class Slot
     {
-        public PcmAudio Audio { get; } = audio;
+        public PcmAudio? Audio { get; }
+        public IStreamingAudio? Stream { get; }
         public int Position;
+        public Slot(PcmAudio audio) => Audio = audio;
+        public Slot(IStreamingAudio stream) { Stream = stream; }
     }
 
     private readonly AudioFormat _format;
@@ -25,11 +29,13 @@ public sealed class SwitchablePcmProvider : IWaveProvider, IDisposable
     public WaveFormat WaveFormat { get; }
     public AudioFormat Format => _format;
     public bool HasAudio => Volatile.Read(ref _slot) is not null;
-    public TimeSpan Position => Volatile.Read(ref _slot) is { } slot
-        ? TimeSpan.FromSeconds((double)Volatile.Read(ref slot.Position) / _format.Channels / _format.SampleRate)
-        : TimeSpan.Zero;
-    public TimeSpan Duration => Volatile.Read(ref _slot) is { } slot ? slot.Audio.Duration : TimeSpan.Zero;
-    public bool EndOfStream => Volatile.Read(ref _slot) is { } slot && Volatile.Read(ref slot.Position) >= slot.Audio.Samples.Length;
+    public TimeSpan Position => Volatile.Read(ref _slot) is { } slot && slot.Stream is { } stream
+        ? stream.Position
+        : Volatile.Read(ref _slot) is { } pcm
+            ? TimeSpan.FromSeconds((double)Volatile.Read(ref pcm.Position) / _format.Channels / _format.SampleRate)
+            : TimeSpan.Zero;
+    public TimeSpan Duration => Volatile.Read(ref _slot) is { } slot && slot.Stream is { } stream ? stream.Duration : Volatile.Read(ref _slot)?.Audio?.Duration ?? TimeSpan.Zero;
+    public bool EndOfStream => Volatile.Read(ref _slot) is { } slot && (slot.Stream?.IsCompleted ?? (Volatile.Read(ref slot.Position) >= slot.Audio!.Samples.Length));
 
     public void SwitchTo(PcmAudio? audio, TimeSpan startAt = default)
     {
@@ -44,12 +50,22 @@ public sealed class SwitchablePcmProvider : IWaveProvider, IDisposable
         Interlocked.Exchange(ref _slot, slot);
     }
 
+    public void SwitchToStreaming(IStreamingAudio stream, TimeSpan startAt = default)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        ThrowIfDisposed();
+        if (stream.SampleRate != _format.SampleRate || stream.Channels != _format.Channels)
+            throw new ArgumentException("Streaming-Mixformat stimmt nicht überein.", nameof(stream));
+        Interlocked.Exchange(ref _slot, new Slot(stream));
+        if (startAt > TimeSpan.Zero) throw new NotSupportedException("Seek beim Streaming-Start ist nicht unterstützt.");
+    }
+
     public void Seek(TimeSpan position)
     {
         ThrowIfDisposed();
         var slot = Volatile.Read(ref _slot);
-        if (slot is null) return;
-        var frame = Math.Clamp((long)(position.TotalSeconds * _format.SampleRate), 0, slot.Audio.FrameCount);
+        if (slot?.Audio is not { } audio) return;
+        var frame = Math.Clamp((long)(position.TotalSeconds * _format.SampleRate), 0, audio.FrameCount);
         Volatile.Write(ref slot.Position, checked((int)(frame * _format.Channels)));
     }
 
@@ -61,12 +77,23 @@ public sealed class SwitchablePcmProvider : IWaveProvider, IDisposable
             throw new ArgumentOutOfRangeException(nameof(count));
         var slot = Volatile.Read(ref _slot);
         if (slot is null || count == 0) return 0;
-        var sampleCount = Math.Min(count / sizeof(float), slot.Audio.Samples.Length - Volatile.Read(ref slot.Position));
+        if (slot.Stream is { } stream)
+        {
+            var samples = Math.Min(count / sizeof(float), 32_768);
+            var read = stream.Read(_streamScratch.AsSpan(0, samples));
+            if (read == 0) return 0;
+            Buffer.BlockCopy(_streamScratch, 0, buffer, offset, read * sizeof(float));
+            return read * sizeof(float);
+        }
+        var audio = slot.Audio!;
+        var sampleCount = Math.Min(count / sizeof(float), audio.Samples.Length - Volatile.Read(ref slot.Position));
         if (sampleCount <= 0) return 0;
         var start = Interlocked.Add(ref slot.Position, sampleCount) - sampleCount;
-        Buffer.BlockCopy(slot.Audio.RawSamples, start * sizeof(float), buffer, offset, sampleCount * sizeof(float));
+        Buffer.BlockCopy(audio.RawSamples, start * sizeof(float), buffer, offset, sampleCount * sizeof(float));
         return sampleCount * sizeof(float);
     }
+
+    private readonly float[] _streamScratch = new float[32_768];
 
     private void ThrowIfDisposed() { ObjectDisposedException.ThrowIf(_disposed, this); }
     public void Dispose() { _disposed = true; Interlocked.Exchange(ref _slot, null); }

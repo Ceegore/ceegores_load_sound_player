@@ -4,12 +4,13 @@ using NAudio.Wave;
 namespace ClipPlayer.Audio.Windows;
 
 /// <summary>Shared-mode, event-driven output. The device is initialized once per output lifetime.</summary>
-public sealed class WasapiPlaybackOutput : IAudioOutput
+public sealed class WasapiPlaybackOutput : IStreamingAudioOutput
 {
     private readonly int _latencyMilliseconds;
     private readonly SwitchablePcmProvider _provider;
     private WasapiOut? _output;
     private float _volume = 1;
+    private ClipPlayer.Core.IStreamingAudio? _activeStream;
     private bool _disposed;
 
     public WasapiPlaybackOutput(AudioFormat format, int latencyMilliseconds = 150)
@@ -31,7 +32,21 @@ public sealed class WasapiPlaybackOutput : IAudioOutput
     public void SwitchTo(PcmAudio? audio, TimeSpan startAt = default)
     {
         ThrowIfDisposed();
+        DisposeActiveStream();
         _provider.SwitchTo(audio, startAt);
+    }
+
+    public async ValueTask PlayStreamingAsync(ClipPlayer.Core.Track track, ClipPlayer.Core.IStreamingAudio audio, TimeSpan startAt, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(audio);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (audio.SampleRate != Format.SampleRate || audio.Channels != Format.Channels)
+            throw new ArgumentException("Streaming-Mixformat stimmt nicht mit der Ausgabe überein.", nameof(audio));
+        await audio.PrimeAsync(cancellationToken).ConfigureAwait(false);
+        var previous = Interlocked.Exchange(ref _activeStream, audio);
+        if (previous is not null && !ReferenceEquals(previous, audio)) await previous.DisposeAsync().ConfigureAwait(false);
+        _provider.SwitchToStreaming(audio, startAt);
+        Play();
     }
 
     public void Play()
@@ -51,6 +66,7 @@ public sealed class WasapiPlaybackOutput : IAudioOutput
     {
         ThrowIfDisposed();
         _output?.Stop();
+        DisposeActiveStream();
     }
 
     public void Seek(TimeSpan position)
@@ -85,10 +101,19 @@ public sealed class WasapiPlaybackOutput : IAudioOutput
 
     private void ThrowIfDisposed() { ObjectDisposedException.ThrowIf(_disposed, this); }
 
+    private void DisposeActiveStream()
+    {
+        var stream = Interlocked.Exchange(ref _activeStream, null);
+        if (stream is null) return;
+        try { stream.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+        catch (OperationCanceledException) { }
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
+        DisposeActiveStream();
         if (_output is not null) _output.PlaybackStopped -= OnPlaybackStopped;
         _output?.Dispose();
         _provider.Dispose();

@@ -3,18 +3,32 @@ namespace ClipPlayer.Core;
 /// <summary>PCM data produced by a platform decoder. Core intentionally knows no decoder library.</summary>
 public sealed record DecodedAudio
 {
-    public DecodedAudio(ReadOnlyMemory<float> samples, int sampleRate, int channels)
+    public DecodedAudio(ReadOnlyMemory<float> samples, int sampleRate, int channels, IStreamingAudio? stream = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(sampleRate);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(channels);
         Samples = samples;
         SampleRate = sampleRate;
         Channels = channels;
+        Stream = stream;
     }
 
     public ReadOnlyMemory<float> Samples { get; }
     public int SampleRate { get; }
     public int Channels { get; }
+    public IStreamingAudio? Stream { get; }
+    public bool IsStreaming => Stream is not null;
+}
+
+public interface IStreamingAudio : IAsyncDisposable
+{
+    int SampleRate { get; }
+    int Channels { get; }
+    TimeSpan Duration { get; }
+    TimeSpan Position { get; }
+    bool IsCompleted { get; }
+    ValueTask PrimeAsync(CancellationToken cancellationToken);
+    int Read(Span<float> destination);
 }
 
 public interface ITrackDecoder
@@ -35,6 +49,11 @@ public interface IAudioOutput
     ValueTask PauseAsync(CancellationToken cancellationToken);
     ValueTask ResumeAsync(CancellationToken cancellationToken);
     ValueTask StopAsync(CancellationToken cancellationToken);
+}
+
+public interface IStreamingAudioOutput : IAudioOutput
+{
+    ValueTask PlayStreamingAsync(Track track, IStreamingAudio audio, TimeSpan startAt, CancellationToken cancellationToken);
 }
 
 public interface IRecycleBin
