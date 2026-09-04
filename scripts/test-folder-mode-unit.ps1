@@ -49,4 +49,15 @@ if (-not (Test-SupportedPath 'sound.FLAC') -or (Test-SupportedPath 'notes.txt'))
     throw 'Supported extension filtering failed.'
 }
 if ((Format-FileSize 1536) -notmatch 'KB') { throw 'File-size formatting failed.' }
+$script:folderSort = 'Name'; $script:folderDescending = $false
+$tieEntries = @(
+    New-ProbeEntry 'clip1.wav' $false ([DateTime]'2020-01-01') ([DateTime]'2020-01-01') '.wav' 1
+    New-ProbeEntry 'clip01.wav' $false ([DateTime]'2020-01-01') ([DateTime]'2020-01-01') '.wav' 1)
+if (((Get-SortedFolderEntries $tieEntries | ForEach-Object Name) -join ',') -ne 'clip01.wav,clip1.wav') {
+    throw 'Natural-sort ties are not deterministic.'
+}
+$drives = @(Get-FolderEntries $null)
+if ($drives.Count -lt 1 -or @($drives | Where-Object { -not $_.IsDrive -or -not $_.IsFolder }).Count) {
+    throw 'This PC drive enumeration is invalid.'
+}
 Write-Output 'FOLDER UNIT PASS: filtering, natural order, metadata sorts and folder grouping are valid.'

@@ -17,7 +17,7 @@ $playerSource = Join-Path (Split-Path $PSScriptRoot -Parent) 'src\ClipPlayer.Scr
 $folderModuleSource = Join-Path (Split-Path $PSScriptRoot -Parent) 'src\ClipPlayer.Script\ClipPlayer.FolderMode.ps1'
 $launcherSource = Join-Path (Split-Path $PSScriptRoot -Parent) 'src\ClipPlayer.Script\ClipPlayerLauncher.ps1'
 $hostExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-$testRoot = Join-Path ([IO.Path]::GetTempPath()) ('ClipPlayer-script-stress-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+$testRoot = Join-Path ([IO.Path]::GetTempPath()) ('ClipPlayer script stress-' + [Guid]::NewGuid().ToString('N'))
 $diagnostics = Join-Path $testRoot 'diagnostics.json'
 $commandPath = Join-Path $testRoot 'command.txt'
 $stderrPath = Join-Path $testRoot 'stderr.log'
@@ -30,6 +30,7 @@ $roundTripLatencies = New-Object Collections.Generic.List[double]
 $pauseChecks = 0
 $commandId = 0
 $startedAt = Get-Date
+$runSucceeded = $false
 
 function New-SilentWave {
     param([string] $Path, [int] $Seconds = 30)
@@ -142,7 +143,8 @@ try {
     }
 
     $audioPath = Join-Path $testRoot 'clip-1.wav'
-    $argumentLine = "-NoLogo -NoProfile -STA -WindowStyle Hidden -File $launcherScript -AudioPath $audioPath -DiagnosticsPath $diagnostics -AutomationCommandPath $commandPath -BackgroundTest"
+    $argumentLine = "-NoLogo -NoProfile -STA -WindowStyle Hidden -File `"$launcherScript`" -AudioPath `"$audioPath`" " +
+        "-DiagnosticsPath `"$diagnostics`" -AutomationCommandPath `"$commandPath`" -BackgroundTest"
     $playerProcess = Start-Process -FilePath $hostExe -ArgumentList $argumentLine -PassThru `
         -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
     try { $null = $playerProcess.Handle } catch { }
@@ -173,12 +175,21 @@ try {
         $state.FolderPath -eq $nestedRoot -and $state.FolderItemCount -eq 1 -and $state.FolderAudioCount -eq 1 } 5000 'folder navigation'
     $folderUp = Send-BackgroundCommand 'FolderUp'
     $null = Wait-State { param($state) $state.LastAutomationCommandId -eq $folderUp -and $state.FolderPath -eq $testRoot } 5000 'parent navigation'
+    $folderSelect = Send-BackgroundCommand 'FolderSelectFirstFolder'
+    $null = Wait-State { param($state) $state.LastAutomationCommandId -eq $folderSelect -and
+        $state.FolderSelectedPath -eq $nestedRoot } 5000 'folder selection'
     $positionBeforeSort = (Read-State).PositionMilliseconds
     $sortDescending = Send-BackgroundCommand 'FolderSortNameDescending'
     $null = Wait-State { param($state) $state.LastAutomationCommandId -eq $sortDescending -and
         $state.FolderDescending -and $state.FolderItemNames[0] -eq 'folder-a' -and
         $state.FolderItemNames[1] -eq 'clip-5.wav' -and $state.CurrentIndex -eq 4 -and
-        $state.PositionMilliseconds -ge $positionBeforeSort } 5000 'descending folder sort without playback restart'
+        $state.PositionMilliseconds -ge $positionBeforeSort -and
+        $state.FolderSelectedPath -eq $nestedRoot } 5000 'descending sort preserving playback and selection'
+    $replacePlaylist = Send-BackgroundCommand 'ReplacePlaylistWithFirstAudioTest'
+    $null = Wait-State { param($state) $state.LastAutomationCommandId -eq $replacePlaylist -and
+        $state.PlaylistCount -eq 1 -and $state.CurrentIndex -eq 0 -and
+        $state.CurrentPath -eq (Join-Path $testRoot 'clip-5.wav') -and
+        $state.PositionMilliseconds -gt 0 } 5000 'shorter playlist replacement'
     foreach ($sortCase in @(
         [PSCustomObject]@{ Command = 'FolderSortDateCreated'; Expected = 'Date created' }
         [PSCustomObject]@{ Command = 'FolderSortDateModified'; Expected = 'Date modified' }
@@ -198,6 +209,9 @@ try {
         $state.PositionMilliseconds -gt 0 -and $state.CachedPlayerCount -eq 4 } 5000 'folder autoplay and preload'
     $folderOff = Send-BackgroundCommand 'FolderModeOff'
     $null = Wait-State { param($state) $state.LastAutomationCommandId -eq $folderOff -and -not $state.FolderMode } 5000 'folder mode deactivation'
+    $invalidCommand = Send-BackgroundCommand 'IntentionalUnknownCommand'
+    $null = Wait-State { param($state) $state.LastAutomationCommandId -eq $invalidCommand -and
+        $state.Status -like 'Automation error:*' } 5000 'automation error acknowledgement'
     $pauseCommand = Send-BackgroundCommand 'TogglePause'
     $paused = Wait-State { param($state) $state.LastAutomationCommandId -eq $pauseCommand -and $state.IsPaused } 5000 'initial pause'
     Start-Sleep -Milliseconds 500
@@ -214,7 +228,9 @@ try {
         $endTestCommand = Send-BackgroundCommand 'Next'
         $null = Wait-State { param($state) $state.LastAutomationCommandId -eq $endTestCommand -and $state.CurrentIndex -eq $targetIndex } 5000 'end-of-list setup'
     }
-    $null = Wait-State { param($state) $state.CurrentIndex -eq 3 -and $state.IsPaused -and $state.Status -like 'Playback error:*' } 5000 'preloaded decode failure'
+    $null = Wait-State { param($state) $state.CurrentIndex -eq 3 -and $state.IsPaused -and
+        $state.Status -like 'Playback error:*' -and -not $state.PositionSliderEnabled -and
+        $state.PositionText -eq '0:00' -and $state.DurationText -eq '0:00' } 5000 'preloaded decode failure UI reset'
     $recoverCommand = Send-BackgroundCommand 'Next'
     $null = Wait-State { param($state) $state.LastAutomationCommandId -eq $recoverCommand -and $state.CurrentIndex -eq 4 -and -not $state.IsPaused -and $state.PositionMilliseconds -gt 0 } 5000 'decode failure recovery'
     $null = Wait-State { param($state) $state.CurrentIndex -eq 4 -and $state.IsPaused -and $state.PositionMilliseconds -eq 0 } 5000 'final-track completion'
@@ -224,7 +240,7 @@ try {
         $resetCommand = Send-BackgroundCommand 'Previous'
         $null = Wait-State { param($state) $state.LastAutomationCommandId -eq $resetCommand -and $state.CurrentIndex -eq $targetIndex } 5000 'end-of-list reset'
     }
-    $nonIntrusiveCommandChecks = 24
+    $nonIntrusiveCommandChecks = 28
 
     $deletePassed = $null
     $maximumIndex = 2
@@ -284,6 +300,12 @@ try {
         Start-Sleep -Milliseconds $SwitchIntervalMilliseconds
     }
 
+    $clearCommand = Send-BackgroundCommand 'ClearPlaylistTest'
+    $null = Wait-State { param($state) $state.LastAutomationCommandId -eq $clearCommand -and
+        $state.CurrentIndex -eq -1 -and $state.CachedPlayerCount -eq 0 -and
+        -not $state.PositionSliderEnabled -and $state.PositionText -eq '0:00' -and
+        $state.DurationText -eq '0:00' } 5000 'empty playlist UI reset'
+
     $stderrText = if (Test-Path -LiteralPath $stderrPath) { Get-Content -LiteralPath $stderrPath -Raw } else { '' }
     if (-not [string]::IsNullOrWhiteSpace($stderrText)) { throw "Player stderr was not empty: $stderrText" }
     $codeIntegrityEvents = @(Get-WinEvent -FilterHashtable @{
@@ -317,6 +339,7 @@ try {
     }
     [IO.File]::WriteAllText($resultPath, ($summary | ConvertTo-Json -Depth 3))
     [PSCustomObject]$summary | Format-List
+    $runSucceeded = $true
 } finally {
     if ($null -ne $playerProcess -and (Get-Process -Id $playerProcess.Id -ErrorAction SilentlyContinue)) {
         try { $null = Send-BackgroundCommand 'Close'; $null = $playerProcess.WaitForExit(3000) } catch { }
@@ -325,15 +348,12 @@ try {
     foreach ($workerProcess in $workerProcesses) {
         if (Get-Process -Id $workerProcess.Id -ErrorAction SilentlyContinue) { Stop-Process -Id $workerProcess.Id -Force }
     }
-    if (-not $KeepFixture -and (Test-Path -LiteralPath $testRoot)) {
-        Get-ChildItem -LiteralPath $testRoot -File | Where-Object {
-            $_.Name -like 'clip-*.wav' -or $_.Name -in @(
-                'ClipPlayer.ps1', 'ClipPlayer.FolderMode.ps1', 'ClipPlayerLauncher.ps1', 'command.txt', 'ignored.txt')
-        } | Remove-Item -Force -ErrorAction SilentlyContinue
-        $nestedFixture = [IO.Path]::GetFullPath((Join-Path $testRoot 'folder-a'))
-        if ([IO.Path]::GetDirectoryName($nestedFixture) -eq [IO.Path]::GetFullPath($testRoot) -and
-            (Test-Path -LiteralPath $nestedFixture -PathType Container)) {
-            Remove-Item -LiteralPath $nestedFixture -Recurse -Force -ErrorAction SilentlyContinue
+    if ($runSucceeded -and -not $KeepFixture -and (Test-Path -LiteralPath $testRoot)) {
+        $resolvedFixture = [IO.Path]::GetFullPath($testRoot)
+        $tempPrefix = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+        if ($resolvedFixture.StartsWith($tempPrefix, [StringComparison]::OrdinalIgnoreCase) -and
+            [IO.Path]::GetFileName($resolvedFixture) -like 'ClipPlayer script stress-*') {
+            Remove-Item -LiteralPath $resolvedFixture -Recurse -Force
         }
     }
 }

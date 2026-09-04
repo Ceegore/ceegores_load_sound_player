@@ -27,8 +27,8 @@ $null = New-Item -ItemType Directory -Path $InstallDirectory -Force
 $installedScript = Join-Path $InstallDirectory 'ClipPlayer.ps1'
 $installedFolderModule = Join-Path $InstallDirectory 'ClipPlayer.FolderMode.ps1'
 $installedLauncher = Join-Path $InstallDirectory 'ClipPlayerLauncher.ps1'
-Copy-Item -LiteralPath $source -Destination $installedScript -Force
 Copy-Item -LiteralPath $folderModuleSource -Destination $installedFolderModule -Force
+Copy-Item -LiteralPath $source -Destination $installedScript -Force
 Copy-Item -LiteralPath $launcherSource -Destination $installedLauncher -Force
 
 $quotedHost = '"' + $powershellExe + '"'

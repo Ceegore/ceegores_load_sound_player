@@ -97,7 +97,8 @@ function Get-SortedFolderEntries {
                 default { Get-NaturalSortKey $entry.Name }
             }
         }; Descending = $descending }, `
-        @{ Expression = { Get-NaturalSortKey $_.Name } })
+        @{ Expression = { Get-NaturalSortKey $_.Name } }, `
+        @{ Expression = { $_.Name } })
 }
 
 function Test-SamePath {
@@ -117,8 +118,6 @@ function Get-CurrentPlaybackPath {
 function Sync-FolderSelection {
     param([AllowNull()][string] $Path)
     if (-not $script:folderModeEnabled -or [string]::IsNullOrWhiteSpace($Path)) { return }
-    $parent = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($Path))
-    if (-not (Test-SamePath $parent $script:folderPath)) { return }
     $match = @($script:folderEntries | Where-Object { Test-SamePath $_.Path $Path } | Select-Object -First 1)
     if ($match.Count -eq 1) {
         $script:folderView.SelectedItem = $match[0]
@@ -133,10 +132,14 @@ function Update-FolderDeleteButton {
 }
 
 function Render-FolderEntries {
+    $selectedPath = if ($null -eq $script:folderView.SelectedItem) { $null }
+        else { [string]$script:folderView.SelectedItem.Path }
     $script:folderEntries = @(Get-SortedFolderEntries $script:folderEntries)
     $script:folderView.Items.Clear()
     foreach ($entry in $script:folderEntries) { $null = $script:folderView.Items.Add($entry) }
-    Sync-FolderSelection (Get-CurrentPlaybackPath)
+    $selectionExists = $selectedPath -and
+        @($script:folderEntries | Where-Object { Test-SamePath $_.Path $selectedPath }).Count -gt 0
+    Sync-FolderSelection $(if ($selectionExists) { $selectedPath } else { Get-CurrentPlaybackPath })
     Update-FolderDeleteButton
 }
 
@@ -181,7 +184,6 @@ function Set-FolderPlaybackOrder {
     $script:internalSelection = $false
     Set-PreloadWindow
     Update-Controls
-    Sync-FolderSelection $currentPath
 }
 
 function Set-FolderSort {
@@ -197,6 +199,11 @@ function Open-FolderSelection {
     $entry = $script:folderView.SelectedItem
     if ($null -eq $entry) { return }
     if ($entry.IsFolder) { $null = Show-Folder $entry.Path; return }
+    if (-not (Test-Path -LiteralPath $entry.Path -PathType Leaf)) {
+        Set-Status 'The selected audio file is no longer available'
+        $null = Show-Folder $script:folderPath
+        return
+    }
     $paths = @($script:folderEntries | Where-Object { -not $_.IsFolder } | ForEach-Object { $_.Path })
     $selectedIndex = [Array]::IndexOf([object[]]$paths, [object]$entry.Path)
     Set-Playlist $paths ([Math]::Max(0, $selectedIndex)) -PreserveOrder
@@ -233,7 +240,7 @@ function Set-FolderMode {
         if ([string]::IsNullOrWhiteSpace($target) -or -not (Test-Path -LiteralPath $target -PathType Container)) {
             $target = $null
         }
-        $null = Show-Folder $target
+        if (-not (Show-Folder $target)) { $null = Show-Folder $null }
         if (-not $BackgroundTest) { $script:folderView.Focus() | Out-Null }
     } else { Update-Controls; Publish-Diagnostics }
 }
@@ -262,7 +269,11 @@ function Invoke-FolderDelete {
             [Microsoft.VisualBasic.FileIO.RecycleOption]::SendToRecycleBin)
         $null = Show-Folder $script:folderPath
         Set-FolderPlaybackOrder
-    } catch { Set-Status ('Delete failed: ' + $_.Exception.Message) }
+    } catch {
+        Set-Status ('Delete failed: ' + $_.Exception.Message)
+        Set-PreloadWindow
+        Publish-Diagnostics
+    }
     return $true
 }
 
@@ -277,6 +288,12 @@ function Invoke-FolderAutomationCommand {
             $null = Show-Folder $entry[0].Path; return $true
         }
         'FolderUp' { Open-ParentFolder; return $true }
+        'FolderSelectFirstFolder' {
+            $entry = @($script:folderEntries | Where-Object IsFolder | Select-Object -First 1)
+            if ($entry.Count -eq 0) { throw 'No folder is available for the selection check.' }
+            $script:folderView.SelectedItem = $entry[0]
+            return $true
+        }
         'FolderSortNameDescending' {
             $script:folderSortControl.SelectedItem = 'Name'
             $script:folderDirectionControl.SelectedItem = 'Descending'
@@ -314,6 +331,12 @@ function Invoke-FolderAutomationCommand {
             Open-FolderSelection
             return $true
         }
+        'ReplacePlaylistWithFirstAudioTest' {
+            $entry = @($script:folderEntries | Where-Object { -not $_.IsFolder } | Select-Object -First 1)
+            if ($entry.Count -eq 0) { throw 'No audio file is available for the replacement check.' }
+            Set-Playlist @($entry[0].Path) 0 -PreserveOrder
+            return $true
+        }
         'FolderDeleteSelectedTestFixture' {
             if (-not $BackgroundTest -or [string]::IsNullOrWhiteSpace($AutomationCommandPath)) {
                 throw 'Folder deletion automation is restricted to background tests.'
@@ -321,6 +344,7 @@ function Invoke-FolderAutomationCommand {
             $null = Invoke-FolderDelete -SkipConfirmation
             return $true
         }
+        'ClearPlaylistTest' { Set-Playlist @(); return $true }
         default { return $false }
     }
 }
@@ -332,6 +356,7 @@ function Publish-Diagnostics {
         $selectedEntry = if ($null -ne $script:folderView) { $script:folderView.SelectedItem } else { $null }
         $state = [ordered]@{
             ProcessId = $PID; CurrentIndex = $script:currentIndex; CurrentPath = $currentPath
+            PlaylistCount = $script:playlist.Count
             IsPaused = $script:isPaused
             PositionMilliseconds = if ($currentPath -and $script:players.ContainsKey($currentPath)) {
                 [Math]::Round($script:players[$currentPath].Position.TotalMilliseconds)
@@ -350,6 +375,9 @@ function Publish-Diagnostics {
             FolderSort = $script:folderSort; FolderDescending = $script:folderDescending
             FolderSelectedPath = if ($null -eq $selectedEntry) { $null } else { $selectedEntry.Path }
             FolderItemNames = @($script:folderEntries | ForEach-Object Name)
+            PositionText = $script:positionText.Text; DurationText = $script:durationText.Text
+            PositionSliderEnabled = $script:positionSlider.IsEnabled
+            PositionSliderValue = [Math]::Round([double]$script:positionSlider.Value, 4)
             TimestampUtc = [DateTime]::UtcNow.ToString('o')
         }
         [IO.File]::WriteAllText($DiagnosticsPath, ($state | ConvertTo-Json -Compress -Depth 3))
@@ -380,7 +408,10 @@ function Initialize-FolderMode {
     $script:window.FindName('FolderGoButton').Add_Click(({ & $go }).GetNewClosure())
     $script:folderAddress.Add_KeyDown(({ param($sender, $args); if ($args.Key -eq 'Enter') {
         & $go; $args.Handled = $true } }).GetNewClosure())
-    $script:folderView.Add_MouseDoubleClick(({ & $open }).GetNewClosure())
+    $view = $script:folderView
+    $script:folderView.Add_MouseDoubleClick(({ param($sender, $args)
+        if ($null -ne $view.ContainerFromElement($args.OriginalSource)) { & $open }
+    }).GetNewClosure())
     $script:folderView.Add_KeyDown(({ param($sender, $args); if ($args.Key -eq 'Enter') {
         & $open; $args.Handled = $true } }).GetNewClosure())
     $script:folderView.Add_SelectionChanged(({ & $updateDelete }).GetNewClosure())

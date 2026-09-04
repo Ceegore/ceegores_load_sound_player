@@ -55,11 +55,11 @@ $xaml = @'
             <ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" />
             <ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" />
           </Grid.ColumnDefinitions>
-          <Button x:Name="FolderUpButton" Content="Up" MinWidth="48" Margin="0,0,6,0" />
-          <TextBox x:Name="FolderAddress" Grid.Column="1" MinHeight="28" VerticalContentAlignment="Center" />
-          <Button x:Name="FolderGoButton" Grid.Column="2" Content="Go" MinWidth="44" Margin="6,0" />
-          <ComboBox x:Name="FolderSort" Grid.Column="3" MinWidth="108" Margin="0,0,6,0" />
-          <ComboBox x:Name="FolderDirection" Grid.Column="4" MinWidth="94" />
+          <Button x:Name="FolderUpButton" Content="Up" MinWidth="48" Margin="0,0,6,0" AutomationProperties.Name="Parent folder" />
+          <TextBox x:Name="FolderAddress" Grid.Column="1" MinHeight="28" VerticalContentAlignment="Center" AutomationProperties.Name="Folder address" />
+          <Button x:Name="FolderGoButton" Grid.Column="2" Content="Go" MinWidth="44" Margin="6,0" AutomationProperties.Name="Open folder address" />
+          <ComboBox x:Name="FolderSort" Grid.Column="3" MinWidth="108" Margin="0,0,6,0" AutomationProperties.Name="Sort field" />
+          <ComboBox x:Name="FolderDirection" Grid.Column="4" MinWidth="94" AutomationProperties.Name="Sort direction" />
         </Grid>
         <ListView x:Name="FolderView" Grid.Row="1" AutomationProperties.Name="Folders and audio files">
           <ListView.View><GridView>
@@ -151,6 +151,14 @@ function Set-Status {
     $script:statusText.Text = $Text
 }
 
+function Reset-PositionDisplay {
+    $script:seeking = $false
+    $script:positionText.Text = '0:00'
+    $script:durationText.Text = '0:00'
+    $script:positionSlider.Value = 0
+    $script:positionSlider.IsEnabled = $false
+}
+
 function Update-Controls {
     $hasCurrent = $script:currentIndex -ge 0 -and $script:currentIndex -lt $script:playlist.Count
     $script:previousButton.IsEnabled = $hasCurrent -and $script:currentIndex -gt 0
@@ -163,8 +171,9 @@ function Update-Controls {
 function Close-Player {
     param([string] $Path)
     if ($script:players.ContainsKey($Path)) {
-        try { $script:players[$Path].Close() } catch { }
+        $player = $script:players[$Path]
         $null = $script:players.Remove($Path)
+        try { $player.Close() } catch { }
     }
     $null = $script:playerFailures.Remove($Path)
 }
@@ -179,7 +188,10 @@ function Invoke-MediaEvent {
             $message = if ($null -ne $EventArgs.ErrorException) { $EventArgs.ErrorException.Message }
                 else { 'Audio could not be opened.' }
             $script:playerFailures[$Path] = $message
-            if ($isCurrent) { $script:isPaused = $true; Set-Status ("Playback error: " + $message); Publish-Diagnostics }
+            if ($isCurrent) {
+                $script:isPaused = $true; Reset-PositionDisplay
+                Set-Status ("Playback error: " + $message); Publish-Diagnostics
+            }
         }
         'Opened' {
             $null = $script:playerFailures.Remove($Path)
@@ -234,6 +246,7 @@ function Set-PreloadWindow {
 function Select-Track {
     param([int] $Index)
     if ($Index -lt 0 -or $Index -ge $script:playlist.Count) { return }
+    Reset-PositionDisplay
 
     if ($script:currentIndex -ge 0) {
         $oldPath = $script:playlist[$script:currentIndex]
@@ -267,15 +280,16 @@ function Select-Track {
 function Set-Playlist {
     param([string[]] $Paths, [int] $SelectedIndex = 0, [switch] $PreserveOrder)
     foreach ($cachedPath in @($script:players.Keys)) { Close-Player $cachedPath }
+    $script:currentIndex = -1; $script:isPaused = $true
     $validPaths = @($Paths | Where-Object { (Test-Path -LiteralPath $_ -PathType Leaf) -and (Test-SupportedPath $_) } |
         ForEach-Object { [IO.Path]::GetFullPath($_) })
-    $script:playlist = if ($PreserveOrder) { @($validPaths) } else {
-        @($validPaths | Sort-Object @{ Expression = { Get-NaturalSortKey $_ } }, @{ Expression = { $_ } })
-    }
+    if ($PreserveOrder) { $script:playlist = @($validPaths) }
+    else { $script:playlist = @($validPaths |
+        Sort-Object @{ Expression = { Get-NaturalSortKey $_ } }, @{ Expression = { $_ } }) }
     $script:playlistControl.Items.Clear()
     foreach ($path in $script:playlist) { $null = $script:playlistControl.Items.Add([IO.Path]::GetFileName($path)) }
     if ($script:playlist.Count -eq 0) {
-        $script:currentIndex = -1
+        Reset-PositionDisplay
         Set-Status 'No supported files found'
         Update-Controls
         return
@@ -365,6 +379,8 @@ function Invoke-PlayerCommand {
 function Read-AutomationCommand {
     if (-not $BackgroundTest -or [string]::IsNullOrWhiteSpace($AutomationCommandPath) -or
         -not (Test-Path -LiteralPath $AutomationCommandPath -PathType Leaf)) { return }
+    $commandId = $null
+    $commandWatch = $null
     try {
         $raw = [IO.File]::ReadAllText($AutomationCommandPath)
         $separator = $raw.IndexOf('|')
@@ -379,7 +395,10 @@ function Read-AutomationCommand {
         Publish-Diagnostics
     } catch [IO.IOException] { return }
     catch {
+        if ($null -ne $commandWatch) { $commandWatch.Stop(); $script:lastAutomationCommandDurationMilliseconds = $commandWatch.Elapsed.TotalMilliseconds }
+        if ($null -ne $commandId) { $script:lastAutomationCommandId = $commandId }
         Set-Status ("Automation error: $($_.Exception.Message) [$($_.ScriptStackTrace -replace '[\r\n]+', ' ')]")
+        Publish-Diagnostics
     }
 }
 
@@ -464,9 +483,10 @@ if ($BackgroundTest) {
 if (Test-SupportedPath $AudioPath -and (Test-Path -LiteralPath $AudioPath -PathType Leaf)) {
     $fullPath = [IO.Path]::GetFullPath($AudioPath)
     $folder = [IO.Path]::GetDirectoryName($fullPath)
-    $files = @(Get-ChildItem -LiteralPath $folder -File | Where-Object { Test-SupportedPath $_.FullName } |
-        Sort-Object @{ Expression = { Get-NaturalSortKey $_.FullName } }, FullName |
-        ForEach-Object { $_.FullName })
+    try { $files = @(Get-ChildItem -LiteralPath $folder -File | Where-Object { Test-SupportedPath $_.FullName } |
+        ForEach-Object { $_.FullName }) } catch { $files = @() }
+    if ($files -notcontains $fullPath) { $files += $fullPath }
+    $files = @($files | Sort-Object @{ Expression = { Get-NaturalSortKey $_ } }, @{ Expression = { $_ } })
     $selected = -1
     for ($index = 0; $index -lt $files.Count; $index++) {
         if ([string]::Equals($files[$index], $fullPath, [StringComparison]::OrdinalIgnoreCase)) { $selected = $index; break }
