@@ -4,8 +4,10 @@ param(
     [string]$Configuration = 'Release',
     [ValidateRange(1, 10000)]
     [int]$Switches = 1000,
-    [ValidateRange(1, 8)]
-    [int]$CpuWorkers = [Math]::Max(1, [Math]::Min(4, [Environment]::ProcessorCount - 1)),
+    [ValidateRange(0, 64)]
+    [int]$CpuWorkers = 0,
+    [ValidateRange(1, 64)]
+    [int]$CpuWorkerCap = 4,
     [ValidateRange(1, 120)]
     [int]$CpuDurationSeconds = 20,
     [ValidateRange(30, 600)]
@@ -16,6 +18,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$processorCount = [Environment]::ProcessorCount
+if ($CpuWorkers -eq 0) {
+    $CpuWorkers = [Math]::Max(1, [Math]::Min($CpuWorkerCap, $processorCount - 1))
+} elseif ($CpuWorkers -gt $CpuWorkerCap) {
+    throw "CpuWorkers ($CpuWorkers) darf den expliziten CpuWorkerCap ($CpuWorkerCap) nicht überschreiten."
+}
 $testProject = Join-Path $root 'tests\ClipPlayer.Performance.Tests\ClipPlayer.Performance.Tests.csproj'
 if (-not (Test-Path -LiteralPath $testProject)) { throw "Performance-Testprojekt fehlt: $testProject" }
 
@@ -85,11 +93,13 @@ function Stop-BoundedCpuLoad {
 
 try {
     if (-not $SkipBuild) {
-        Write-Output 'Baue einmalig mit --no-restore (SAC-sicherer Gate-Ablauf).'
-        $buildCode = Invoke-Dotnet @('build', 'ClipPlayer.sln', '-c', $Configuration, '--no-restore') $buildOut $buildErr 600
-        if ($buildCode -ne 0) {
-            Write-Error "Build-Gate fehlgeschlagen (Exit $buildCode). Logs: $outputDirectory"
-            exit $buildCode
+        Write-Output 'Baue Produkt und Performance-Test mit --no-restore (WAP bleibt externes VS-Gate).'
+        foreach ($project in @('src\ClipPlayer.App\ClipPlayer.App.csproj', $testProject)) {
+            $buildCode = Invoke-Dotnet @('build', $project, '-c', $Configuration, '--no-restore') $buildOut $buildErr 600
+            if ($buildCode -ne 0) {
+                Write-Error "Build-Gate fehlgeschlagen (Exit $buildCode). Logs: $outputDirectory"
+                exit $buildCode
+            }
         }
     }
 
@@ -120,6 +130,8 @@ try {
         configuration = $Configuration
         requestedSwitches = $Switches
         cpuWorkers = if ($NoCpuStress) { 0 } else { $CpuWorkers }
+        cpuWorkerCap = $CpuWorkerCap
+        processorCount = $processorCount
         cpuDurationSeconds = if ($NoCpuStress) { 0 } else { $CpuDurationSeconds }
         testExitCode = $testExitCode
         sacBlocked = $sacBlocked

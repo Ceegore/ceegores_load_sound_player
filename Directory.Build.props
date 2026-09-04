@@ -11,4 +11,12 @@
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <!-- Customer drops are deliberately symbol-free; diagnostics use CI symbols. -->
+    <DebugSymbols>false</DebugSymbols>
+    <DebugType>None</DebugType>
+    <IncludeSymbols>false</IncludeSymbols>
+    <IncludeSource>false</IncludeSource>
+    <PublishSymbols>false</PublishSymbols>
+  </PropertyGroup>
 </Project>

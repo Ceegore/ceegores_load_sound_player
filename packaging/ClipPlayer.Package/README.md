@@ -24,9 +24,14 @@ in den Paketinhalt aufgenommen.
 Aus dem Repository-Root:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass `
+powershell.exe -NoProfile `
   -File .\packaging\ClipPlayer.Package\Validate-Package.ps1
 ```
+
+Falls die lokale Host-ExecutionPolicy das Skript verweigert, muss ein
+Administrator einen zulässigen, signierten Checkout bzw. die vorhandene
+Unternehmensfreigabe verwenden. Das Repository setzt die Host-Policy niemals
+und empfiehlt keinen `ExecutionPolicy Bypass`.
 
 Der Validator prüft alle Manifestpfade, PNG-Dateien als PNG, die erwarteten
 Pixelgrößen, die drei und nur drei Associations, x64 und das Fehlen von SVG-/Shell-
@@ -48,7 +53,8 @@ ihn nicht ersetzen.
    „Windows-Anwendungsentwicklung“ sowie Windows 11 SDK 22621+ installieren.
 2. `ClipPlayer.sln` in Visual Studio öffnen, `Release | x64` wählen und das
    WAP-Projekt `ClipPlayer.Package` erstellen. Falls `Microsoft.AppXPackage.Targets`
-   fehlt, ist dies ein Umgebungsfehler; nicht als grünen MSIX-Build melden.
+   fehlt, ist dies ein Umgebungsfehler; nicht als grünen MSIX-Build melden. Der
+   CLI-Release-Gate baut bewusst nur die .NET-Projekte; dieses VS-Gate bleibt offen.
 3. Im erzeugten Paket manifestbezogene Warnungen prüfen; insbesondere müssen alle
    Dateien aus `Assets\*.png` enthalten sein und keine SVG-/unbekannten DLL- oder
    Codec-Dateien auftauchen.

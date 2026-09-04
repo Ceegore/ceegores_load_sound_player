@@ -6,7 +6,8 @@ param(
     [string]$CanaryFilter = 'FullyQualifiedName~ClipPlayer.Core.Tests.PlaybackCoordinatorTests.EmptyPlaylistIsEmptyAndMissingDecoderIsVisible',
     [int]$MaxAttempts = 4,
     [int]$SettleSeconds = 20,
-    [int]$TimeoutSeconds = 300
+    [int]$TimeoutSeconds = 300,
+    [switch]$SkipBuild
 )
 
 $ErrorActionPreference = 'Stop'
@@ -53,7 +54,11 @@ function Invoke-TestProcess([string]$testFilter, [int]$attempt, [string]$target 
     }
     $output = (Get-Output $stdout) + (Get-Output $stderr)
     $events = Get-SacEvent $started
-    [PSCustomObject]@{ ExitCode = $process.ExitCode; Output = $output; Sac = ($output -match '0x800711C7' -or $events.Count -gt 0); Timeout = $false }
+    $exitCode = $process.ExitCode
+    if ($null -eq $exitCode) {
+        return [PSCustomObject]@{ ExitCode = 125; Output = $output; Sac = $false; Timeout = $false; Inconclusive = $true }
+    }
+    [PSCustomObject]@{ ExitCode = [int]$exitCode; Output = $output; Sac = ($output -match '0x800711C7' -or $events.Count -gt 0); Timeout = $false; Inconclusive = $false }
 }
 
 function Resolve-TestTarget([string]$testFilter) {
@@ -64,11 +69,22 @@ function Resolve-TestTarget([string]$testFilter) {
 }
 
 if ($MaxAttempts -lt 1 -or $MaxAttempts -gt 4) { throw 'MaxAttempts muss zwischen 1 und 4 liegen.' }
-Write-Output 'Restore und einmaliger Release-Build starten.'
-& dotnet restore $solutionPath --locked-mode
-if ($LASTEXITCODE -ne 0) { exit 1 }
-& dotnet build $solutionPath --configuration Release --no-restore
-if ($LASTEXITCODE -ne 0) { exit 1 }
+if (-not $SkipBuild) {
+    Write-Output 'Restore und Release-Build der Testziele starten (WAP bleibt externes VS-Gate).'
+    & dotnet restore $solutionPath --locked-mode
+    if ($LASTEXITCODE -ne 0) { exit 1 }
+    $buildTargets = @(
+        (Join-Path $root 'src\ClipPlayer.App\ClipPlayer.App.csproj'),
+        (Join-Path $root $CanaryProject),
+        (Join-Path $root (Resolve-TestTarget $Filter))
+    ) | Select-Object -Unique
+    foreach ($buildTarget in $buildTargets) {
+        & dotnet build $buildTarget --configuration Release --runtime win-x64 --no-restore
+        if ($LASTEXITCODE -ne 0) { exit 1 }
+    }
+} else {
+    Write-Output 'Vorhandenen Release-Build verwenden (--SkipBuild).'
+}
 if ([string]::IsNullOrWhiteSpace($CanaryFilter)) { Write-Output 'CanaryFilter darf nicht leer sein.'; exit 3 }
 $canaryName = (($CanaryFilter -split '~')[-1] -split '\.')[-1]
 $canarySource = Get-ChildItem -LiteralPath (Join-Path $root 'tests') -Filter '*.cs' -Recurse -File |
@@ -84,6 +100,7 @@ for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
         continue
     }
     if ($canary.Timeout) { Write-Output 'Canary-Test überschritt das harte Timeout.'; exit 124 }
+    if ($canary.Inconclusive) { Write-Output 'Canary-Test ohne verwertbaren ExitCode; Ergebnis ist inconclusive.'; exit 125 }
     if ($canary.Output -match '(?i)(no test matches|kein test entspricht)') {
         Write-Output 'Canary-Filter passte zu keinem Test.'; exit 3
     }
@@ -99,6 +116,7 @@ for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
         continue
     }
     if ($result.Timeout) { Write-Output 'Testlauf überschritt das harte Timeout.'; exit 124 }
+    if ($result.Inconclusive) { Write-Output 'Testlauf ohne verwertbaren ExitCode; Ergebnis ist inconclusive.'; exit 125 }
     if (($result.Output -match '(?i)(no test matches|kein test entspricht)') -and
         $result.Output -notmatch '(?im)^\s*(passed|bestanden|failed|fehler)\b') { exit 3 }
     exit ([int]$result.ExitCode)

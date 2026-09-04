@@ -4,25 +4,53 @@ Stand: 2026-09-04. Dieses Dokument ergänzt `docs/SAC.md` und den Implementierun
 
 ## Automatischer, hardwarefreier Gate-Lauf
 
-Nach einem erfolgreichen locked Restore läuft ein einmaliger Release-Build. Danach
-startet der begrenzte Harness:
+Der reproduzierbare lokale Lauf führt locked Restore, Release-Builds der .NET-
+Projekte, SAC-sichere ausgewählte Tests, symbolfreies self-contained x64-Publish,
+statische Paketprüfung und SBOM-Prüfung aus. Das WAP/MSIX-Projekt wird wegen der
+Visual-Studio-Targets separat als externes Gate gebaut:
 
 ```powershell
-dotnet restore ClipPlayer.sln --locked-mode
-dotnet build ClipPlayer.sln -c Release --no-restore
-powershell -NoProfile -File .\scripts\run-audio-stress.ps1 -Configuration Release -Switches 1000
+powershell -NoProfile -File .\scripts\verify-release.ps1
 ```
+
+Optional kann der Performance-Satz in denselben Lauf aufgenommen werden:
+
+```powershell
+powershell -NoProfile -File .\scripts\verify-release.ps1 -IncludePerformance
+```
+
+Ein Fehler der Host-ExecutionPolicy wird nicht umgangen; der Lauf ist dann nach
+Unternehmensvorgabe auf einem erlaubten/signierten Checkout zu wiederholen.
 
 Der Harness verwendet ausschließlich normale Prozess-/Job-Priorität. Er ändert weder
 SAC, Defender, WDAC, AppLocker noch Execution Policy und setzt keine Affinität oder
-Echtzeit-/High-Priority-Klasse. Die CPU-Worker sind auf höchstens vier begrenzt und
-enden nach dem konfigurierten Zeitfenster. Ergebnislogs und `metrics.json` liegen unter
+Echtzeit-/High-Priority-Klasse. Die CPU-Worker werden standardmäßig aus der CPU-Anzahl
+abgeleitet (`max(1, ProcessorCount - 1)`) und durch den expliziten, änderbaren Cap
+`-CpuWorkerCap 4` begrenzt. Mit `-CpuWorkers N` kann ein niedrigerer Wert gewählt
+werden; Werte über den Cap werden abgelehnt. Die Worker enden nach dem konfigurierten
+Zeitfenster. Ergebnislogs und `metrics.json` liegen unter
 `%TEMP%\ClipPlayer\stress-*` und werden nicht versioniert.
+
+Beispiel für einen Rechner mit eigener Lastgrenze:
+
+```powershell
+powershell -NoProfile -File .\scripts\run-audio-stress.ps1 -CpuWorkerCap 8 -CpuWorkers 3
+```
 
 Die Performance-Tests prüfen 1.000 deterministisch wechselnde Selection-Befehle durch
 den Cache-Port sowie 1.000 Preload-Anfragen am echten `PcmCache`. Geprüft werden
 Provider-/Cache-Hits, maximal vier Einträge, Cachebudget, Decoder-Wiederverwendung,
 kein veralteter Track und p95 <= 100 ms für den hardwarefreien Selection-Pfad.
+
+## Coverage ist ein separates Qualitäts-Gate
+
+`verify-release.ps1` behauptet keine Coverage. Instrumentierung mit Coverlet verändert
+die Test-Binaries, erhöht Laufzeit und Speicherbedarf deutlich und kann SAC/CodeIntegrity
+erneut triggern; außerdem ist im Repository kein einheitlicher, fachlich freigegebener
+Schwellenwert für alle drei Testprojekte definiert. Coverage wird daher nur in einer
+dafür freigegebenen CI-/Nicht-SAC-Umgebung einmalig erzeugt, mit einem versionierten
+Schwellenwert geprüft und als Release-Anhang archiviert. Fehlt dieser Anhang, bleibt
+das Qualitäts-Gate offen; ein grüner lokaler Release-Gate-Lauf ersetzt ihn nicht.
 
 `run-audio-stress.ps1` liefert Exit 0 bei bestandenem Gate, Exit 1 bei echtem Test-/Build-
 Fehler, Exit 3 bei leerem Filter, Exit 124 bei Timeout und Exit 42 bei erkannter SAC-
