@@ -20,6 +20,9 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName Microsoft.VisualBasic
 
 $supportedExtensions = @('.wav', '.mp3', '.flac')
+$folderModeScript = Join-Path $PSScriptRoot 'ClipPlayer.FolderMode.ps1'
+if (-not (Test-Path -LiteralPath $folderModeScript -PathType Leaf)) { throw "Folder mode module missing: $folderModeScript" }
+. $folderModeScript
 $xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -34,12 +37,41 @@ $xaml = @'
       <RowDefinition Height="Auto" />
     </Grid.RowDefinitions>
     <DockPanel Grid.Row="0" Margin="0,0,0,10">
-      <Button x:Name="OpenButton" DockPanel.Dock="Right" Content="Open..." MinWidth="80"
-              MinHeight="34" Padding="10,4" AutomationProperties.Name="Open audio files" />
+      <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+        <ToggleButton x:Name="FolderModeToggle" Content="Folder mode" MinWidth="100" MinHeight="34"
+                      Margin="0,0,8,0" AutomationProperties.Name="Folder mode" />
+        <Button x:Name="OpenButton" Content="Open..." MinWidth="80" MinHeight="34" Padding="10,4"
+                AutomationProperties.Name="Open audio files" />
+      </StackPanel>
       <TextBlock Text="ClipPlayer" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center" />
     </DockPanel>
-    <ListBox x:Name="Playlist" Grid.Row="1" AutomationProperties.Name="Audio files"
-             ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
+    <Grid Grid.Row="1">
+      <ListBox x:Name="Playlist" AutomationProperties.Name="Audio files"
+               ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
+      <Grid x:Name="FolderPanel" Visibility="Collapsed">
+        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+        <Grid x:Name="FolderNavigationBar" Margin="0,0,0,8">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" />
+          </Grid.ColumnDefinitions>
+          <Button x:Name="FolderUpButton" Content="Up" MinWidth="48" Margin="0,0,6,0" />
+          <TextBox x:Name="FolderAddress" Grid.Column="1" MinHeight="28" VerticalContentAlignment="Center" />
+          <Button x:Name="FolderGoButton" Grid.Column="2" Content="Go" MinWidth="44" Margin="6,0" />
+          <ComboBox x:Name="FolderSort" Grid.Column="3" MinWidth="108" Margin="0,0,6,0" />
+          <ComboBox x:Name="FolderDirection" Grid.Column="4" MinWidth="94" />
+        </Grid>
+        <ListView x:Name="FolderView" Grid.Row="1" AutomationProperties.Name="Folders and audio files">
+          <ListView.View><GridView>
+            <GridViewColumn Header="Name" Width="190" DisplayMemberBinding="{Binding Name}" />
+            <GridViewColumn Header="Date modified" Width="125" DisplayMemberBinding="{Binding ModifiedText}" />
+            <GridViewColumn Header="Date created" Width="125" DisplayMemberBinding="{Binding CreatedText}" />
+            <GridViewColumn Header="Type" Width="85" DisplayMemberBinding="{Binding Type}" />
+            <GridViewColumn Header="Size" Width="70" DisplayMemberBinding="{Binding SizeText}" />
+          </GridView></ListView.View>
+        </ListView>
+      </Grid>
+    </Grid>
     <DockPanel Grid.Row="2" Margin="0,12,0,0">
       <TextBlock x:Name="PositionText" DockPanel.Dock="Left" Text="0:00" Width="48"
                  VerticalAlignment="Center" />
@@ -70,38 +102,13 @@ $xaml = @'
 </Window>
 '@
 
-function Test-SupportedPath {
-    param([string] $Path)
-    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
-    return $supportedExtensions -contains [IO.Path]::GetExtension($Path).ToLowerInvariant()
-}
-
-function Convert-TimeText {
-    param([TimeSpan] $Value)
-    if ($Value.TotalHours -ge 1) { return $Value.ToString('h\:mm\:ss') }
-    return $Value.ToString('m\:ss')
-}
-
-function Get-NaturalSortKey {
-    param([string] $Path)
-    return [regex]::Replace([IO.Path]::GetFileName($Path), '\d+', {
-        param($match)
-        $digits = $match.Value.TrimStart('0'); if ($digits.Length -eq 0) { $digits = '0' }
-        return ('{0:D8}:{1}' -f $digits.Length, $digits)
-    })
-}
-
-function New-WindowFromXaml {
-    $reader = New-Object System.Xml.XmlNodeReader ([xml]$xaml)
-    try { return [Windows.Markup.XamlReader]::Load($reader) }
-    finally { $reader.Dispose() }
-}
-
 if ($SelfTest) {
     $probeWindow = New-WindowFromXaml
     $requiredNames = @(
         'Playlist', 'OpenButton', 'PreviousButton', 'PauseButton', 'NextButton',
-        'DeleteButton', 'PositionSlider', 'VolumeSlider', 'StatusText'
+        'DeleteButton', 'PositionSlider', 'VolumeSlider', 'StatusText',
+        'FolderModeToggle', 'FolderPanel', 'FolderView', 'FolderAddress',
+        'FolderUpButton', 'FolderGoButton', 'FolderSort', 'FolderDirection'
     )
     foreach ($name in $requiredNames) {
         if ($null -eq $probeWindow.FindName($name)) { throw "Missing UI element: $name" }
@@ -139,36 +146,6 @@ $script:diagnosticTick = 0
 $script:lastAutomationCommandId = 0
 $script:lastAutomationCommandDurationMilliseconds = 0
 
-function Publish-Diagnostics {
-    if ([string]::IsNullOrWhiteSpace($DiagnosticsPath)) { return }
-    try {
-        $currentPath = $null
-        if ($script:currentIndex -ge 0 -and $script:currentIndex -lt $script:playlist.Count) {
-            $currentPath = $script:playlist[$script:currentIndex]
-        }
-        $state = [ordered]@{
-            ProcessId = $PID
-            CurrentIndex = $script:currentIndex
-            CurrentPath = $currentPath
-            IsPaused = $script:isPaused
-            PositionMilliseconds = if ($currentPath -and $script:players.ContainsKey($currentPath)) {
-                [Math]::Round($script:players[$currentPath].Position.TotalMilliseconds)
-            } else { 0 }
-            DurationMilliseconds = if ($currentPath -and $script:players.ContainsKey($currentPath) -and
-                $script:players[$currentPath].NaturalDuration.HasTimeSpan) {
-                [Math]::Round($script:players[$currentPath].NaturalDuration.TimeSpan.TotalMilliseconds)
-            } else { 0 }
-            CachedPlayerCount = $script:players.Count
-            CachedPaths = @($script:players.Keys)
-            Status = $script:statusText.Text
-            LastAutomationCommandId = $script:lastAutomationCommandId
-            LastAutomationCommandDurationMilliseconds = $script:lastAutomationCommandDurationMilliseconds
-            TimestampUtc = [DateTime]::UtcNow.ToString('o')
-        }
-        [IO.File]::WriteAllText($DiagnosticsPath, ($state | ConvertTo-Json -Compress))
-    } catch { }
-}
-
 function Set-Status {
     param([string] $Text)
     $script:statusText.Text = $Text
@@ -180,6 +157,7 @@ function Update-Controls {
     $script:nextButton.IsEnabled = $hasCurrent -and $script:currentIndex -lt ($script:playlist.Count - 1)
     $script:pauseButton.IsEnabled = $hasCurrent
     $script:deleteButton.IsEnabled = $hasCurrent
+    Update-FolderDeleteButton
 }
 
 function Close-Player {
@@ -281,16 +259,19 @@ function Select-Track {
     $player.Position = [TimeSpan]::Zero
     $player.Play()
     if ($player.NaturalDuration.HasTimeSpan) { Set-Status ([IO.Path]::GetFileName($path)) }
+    Sync-FolderSelection $path
     Update-Controls
     Publish-Diagnostics
 }
 
 function Set-Playlist {
-    param([string[]] $Paths, [int] $SelectedIndex = 0)
+    param([string[]] $Paths, [int] $SelectedIndex = 0, [switch] $PreserveOrder)
     foreach ($cachedPath in @($script:players.Keys)) { Close-Player $cachedPath }
-    $script:playlist = @($Paths | Where-Object { (Test-Path -LiteralPath $_ -PathType Leaf) -and (Test-SupportedPath $_) } |
-        ForEach-Object { [IO.Path]::GetFullPath($_) } |
-        Sort-Object @{ Expression = { Get-NaturalSortKey $_ } }, @{ Expression = { $_ } })
+    $validPaths = @($Paths | Where-Object { (Test-Path -LiteralPath $_ -PathType Leaf) -and (Test-SupportedPath $_) } |
+        ForEach-Object { [IO.Path]::GetFullPath($_) })
+    $script:playlist = if ($PreserveOrder) { @($validPaths) } else {
+        @($validPaths | Sort-Object @{ Expression = { Get-NaturalSortKey $_ } }, @{ Expression = { $_ } })
+    }
     $script:playlistControl.Items.Clear()
     foreach ($path in $script:playlist) { $null = $script:playlistControl.Items.Add([IO.Path]::GetFileName($path)) }
     if ($script:playlist.Count -eq 0) {
@@ -365,7 +346,7 @@ function Remove-CurrentTrack {
     }
     $remaining = @($script:playlist | Where-Object { $_ -ne $path })
     if ($remaining.Count -eq 0) { Set-Playlist @(); return }
-    Set-Playlist $remaining ([Math]::Min($script:currentIndex, $remaining.Count - 1))
+    Set-Playlist $remaining ([Math]::Min($script:currentIndex, $remaining.Count - 1)) -PreserveOrder
 }
 
 function Invoke-PlayerCommand {
@@ -374,10 +355,10 @@ function Invoke-PlayerCommand {
         'Previous' { Select-Track ($script:currentIndex - 1) }
         'Next' { Select-Track ($script:currentIndex + 1) }
         'TogglePause' { Toggle-Pause }
-        'Delete' { Remove-CurrentTrack }
+        'Delete' { if (-not (Invoke-FolderDelete)) { Remove-CurrentTrack } }
         'DeleteConfirmedTestFixture' { Remove-CurrentTrack -SkipConfirmation }
         'Close' { $script:window.Close() }
-        default { throw "Unknown player command: $Command" }
+        default { if (-not (Invoke-FolderAutomationCommand $Command)) { throw "Unknown player command: $Command" } }
     }
 }
 
@@ -398,10 +379,11 @@ function Read-AutomationCommand {
         Publish-Diagnostics
     } catch [IO.IOException] { return }
     catch {
-        Set-Status ("Automation error: " + $_.Exception.Message)
+        Set-Status ("Automation error: $($_.Exception.Message) [$($_.ScriptStackTrace -replace '[\r\n]+', ' ')]")
     }
 }
 
+Initialize-FolderMode
 $script:openButton.Add_Click({ Open-AudioFiles })
 $script:previousButton.Add_Click({ Invoke-PlayerCommand 'Previous' })
 $script:nextButton.Add_Click({ Invoke-PlayerCommand 'Next' })
@@ -419,6 +401,7 @@ $script:playlistControl.Add_SelectionChanged({
 $script:window.Add_PreviewKeyDown({
     param($sender, $eventArgs)
     if ([Windows.Input.Keyboard]::Modifiers -ne [Windows.Input.ModifierKeys]::None) { return }
+    if ($script:folderModeEnabled -and $script:folderNavigationBar.IsKeyboardFocusWithin) { return }
     switch ($eventArgs.Key) {
         ([Windows.Input.Key]::Left) { Invoke-PlayerCommand 'Previous'; $eventArgs.Handled = $true }
         ([Windows.Input.Key]::Right) { Invoke-PlayerCommand 'Next'; $eventArgs.Handled = $true }

@@ -12,9 +12,11 @@ if (-not $InstallDirectory.Equals($defaultInstallDirectory, [StringComparison]::
 }
 
 $source = Join-Path (Split-Path $PSScriptRoot -Parent) 'src\ClipPlayer.Script\ClipPlayer.ps1'
+$folderModuleSource = Join-Path (Split-Path $PSScriptRoot -Parent) 'src\ClipPlayer.Script\ClipPlayer.FolderMode.ps1'
 $launcherSource = Join-Path (Split-Path $PSScriptRoot -Parent) 'src\ClipPlayer.Script\ClipPlayerLauncher.ps1'
 $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Player script missing: $source" }
+if (-not (Test-Path -LiteralPath $folderModuleSource -PathType Leaf)) { throw "Folder mode module missing: $folderModuleSource" }
 if (-not (Test-Path -LiteralPath $launcherSource -PathType Leaf)) { throw "Launcher script missing: $launcherSource" }
 if (-not (Test-Path -LiteralPath $powershellExe -PathType Leaf)) { throw 'Windows PowerShell 5.1 is unavailable.' }
 
@@ -23,8 +25,10 @@ if ($signature.Status -ne 'Valid') { throw 'The Windows PowerShell host is not v
 
 $null = New-Item -ItemType Directory -Path $InstallDirectory -Force
 $installedScript = Join-Path $InstallDirectory 'ClipPlayer.ps1'
+$installedFolderModule = Join-Path $InstallDirectory 'ClipPlayer.FolderMode.ps1'
 $installedLauncher = Join-Path $InstallDirectory 'ClipPlayerLauncher.ps1'
 Copy-Item -LiteralPath $source -Destination $installedScript -Force
+Copy-Item -LiteralPath $folderModuleSource -Destination $installedFolderModule -Force
 Copy-Item -LiteralPath $launcherSource -Destination $installedLauncher -Force
 
 $quotedHost = '"' + $powershellExe + '"'
