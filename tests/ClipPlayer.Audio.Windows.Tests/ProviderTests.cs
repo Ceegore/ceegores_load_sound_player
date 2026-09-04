@@ -1,4 +1,5 @@
 using ClipPlayer.Audio.Windows;
+using ClipPlayer.Core;
 
 namespace ClipPlayer.Audio.Windows.Tests;
 
@@ -43,5 +44,28 @@ public sealed class ProviderTests
         Assert.Equal(4, ring.Write(new[] { 3f, 4f, 5f, 6f }));
         Assert.Equal(4, ring.Read(output.AsSpan(0, 4)));
         Assert.Equal(3f, output[0]);
+    }
+
+    [Fact]
+    public void StreamingFailureIsNotReportedAsSilenceOrEndOfTrack()
+    {
+        var provider = new SwitchablePcmProvider(new AudioFormat(8_000, 1));
+        provider.SwitchToStreaming(new FailedStream());
+        Assert.False(provider.EndOfStream);
+        Assert.Throws<InvalidDataException>(() => provider.Read(new byte[sizeof(float)], 0, sizeof(float)));
+        provider.Dispose();
+    }
+
+    private sealed class FailedStream : IStreamingAudio
+    {
+        public int SampleRate => 8_000;
+        public int Channels => 1;
+        public TimeSpan Duration => TimeSpan.FromMinutes(1);
+        public TimeSpan Position => TimeSpan.Zero;
+        public bool IsCompleted => true;
+        public Exception? Failure => new IOException("decoder read failed");
+        public ValueTask PrimeAsync(CancellationToken cancellationToken) => ValueTask.CompletedTask;
+        public int Read(Span<float> destination) => 0;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

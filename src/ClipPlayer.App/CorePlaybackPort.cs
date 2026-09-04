@@ -20,6 +20,8 @@ public sealed class CorePlaybackPort : IPlaybackPort, IPlaylistPlaybackPort, IPl
     private readonly WasapiPlaybackOutput _wasapi;
     private readonly PlaybackCoordinator _coordinator;
     private readonly WindowsPcmCache _windowsCache;
+    private readonly object _deviceGate = new();
+    private Task _deviceChangeTask = Task.CompletedTask;
     private IReadOnlyList<Track> _tracks = [];
     private bool _disposed;
 
@@ -33,6 +35,7 @@ public sealed class CorePlaybackPort : IPlaybackPort, IPlaylistPlaybackPort, IPl
             new CoreAudioOutputAdapter(_wasapi),
             _windowsCache);
         _wasapi.TrackEnded += OnTrackEnded;
+        _wasapi.PlaybackFaulted += OnPlaybackFaulted;
         _wasapi.DeviceChanged += OnDeviceChanged;
         _coordinator.SnapshotChanged += OnSnapshotChanged;
     }
@@ -94,39 +97,68 @@ public sealed class CorePlaybackPort : IPlaybackPort, IPlaylistPlaybackPort, IPl
 
     public async Task HandleDeviceChangeAsync(CancellationToken cancellationToken)
     {
+        _windowsCache.Clear();
         await _coordinator.StopAsync(cancellationToken).ConfigureAwait(false);
         _wasapi.ReinitializeAfterDeviceChange();
         if (_coordinator.Playlist.CurrentIndex >= 0)
             await _coordinator.SelectAsync(_coordinator.Playlist.CurrentIndex, cancellationToken).ConfigureAwait(false);
     }
 
-    private async void OnTrackEnded(object? sender, EventArgs e)
-    {
-        try { await _coordinator.NotifyTrackEndedAsync().ConfigureAwait(false); }
-        catch (ObjectDisposedException) { }
-    }
-
-    private async void OnDeviceChanged(object? sender, EventArgs e)
+    private async void OnTrackEnded(object? sender, PlaybackEndedEventArgs e)
     {
         try
         {
-            _windowsCache.Clear();
-            await HandleDeviceChangeAsync(CancellationToken.None).ConfigureAwait(false);
+            var track = e.Track;
+            await _coordinator.NotifyTrackEndedAsync(track, e.Revision,
+                e.SelectionGeneration == 0 ? null : new SelectionGeneration(e.SelectionGeneration)).ConfigureAwait(false);
         }
         catch (ObjectDisposedException) { }
-        catch { /* Device loss is retried by the next user selection. */ }
     }
 
-    private void OnSnapshotChanged(object? sender, PlaybackSnapshot snapshot) =>
+    private void OnDeviceChanged(object? sender, EventArgs e)
+    {
+        if (_disposed) return;
+        lock (_deviceGate)
+        {
+            _deviceChangeTask = _deviceChangeTask.ContinueWith(_ => HandleDeviceChangeSafelyAsync(),
+                CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default).Unwrap();
+        }
+    }
+
+    private async Task HandleDeviceChangeSafelyAsync()
+    {
+        try { await HandleDeviceChangeAsync(CancellationToken.None).ConfigureAwait(false); }
+        catch (ObjectDisposedException) { }
+        catch (Exception exception) { await _coordinator.NotifyPlaybackFaultAsync(exception).ConfigureAwait(false); }
+    }
+
+    private void OnPlaybackFaulted(object? sender, PlaybackFaultEventArgs e) =>
+        _ = ReportPlaybackFaultAsync(e.Error);
+
+    private async Task ReportPlaybackFaultAsync(Exception exception)
+    {
+        try { await _coordinator.NotifyPlaybackFaultAsync(exception).ConfigureAwait(false); }
+        catch (ObjectDisposedException) { }
+    }
+
+    private void OnSnapshotChanged(object? sender, PlaybackSnapshot snapshot)
+    {
+        if (snapshot.State == PlaybackState.Loading)
+            _wasapi.SetPlaybackIdentity(_coordinator.PlaylistRevision, snapshot.SelectionGeneration.Value);
         PlaybackChanged?.Invoke(this, snapshot);
+    }
 
     public async ValueTask DisposeAsync()
     {
         if (_disposed) return;
         _disposed = true;
         _wasapi.TrackEnded -= OnTrackEnded;
+        _wasapi.PlaybackFaulted -= OnPlaybackFaulted;
         _wasapi.DeviceChanged -= OnDeviceChanged;
         _coordinator.SnapshotChanged -= OnSnapshotChanged;
+        Task deviceTask;
+        lock (_deviceGate) deviceTask = _deviceChangeTask;
+        await deviceTask.ConfigureAwait(false);
         await _coordinator.DisposeAsync().ConfigureAwait(false);
         _wasapi.Dispose();
         _cache.Dispose();

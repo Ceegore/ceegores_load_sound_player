@@ -15,10 +15,15 @@ internal static class DecoderSupport
     {
         var format = new AudioFormat(samples.WaveFormat.SampleRate, samples.WaveFormat.Channels);
         if (!format.IsValid) throw new InvalidDataException("Ungültiges Audioformat.");
+        var target = request.TargetFormat ?? format;
+        if (!target.IsValid) throw new ArgumentOutOfRangeException(nameof(request));
         const long maxBytes = 128L * 1024 * 1024;
         var maxSamples = maxBytes / sizeof(float);
-        var estimatedBytes = source.TotalTime.TotalSeconds * samples.WaveFormat.AverageBytesPerSecond;
-        if (estimatedBytes > maxBytes) throw new PcmClipTooLargeException();
+        var sourceBytes = source.TotalTime.TotalSeconds * format.BlockAlign;
+        var targetBytes = source.TotalTime.TotalSeconds * target.BlockAlign;
+        // Decide before allocating/decoding. This also covers a small mono source
+        // whose fixed 48 kHz stereo mix would cross the PCM budget after conversion.
+        if (sourceBytes > maxBytes || targetBytes > maxBytes) throw new PcmClipTooLargeException();
         var buffer = new float[Math.Min(32_768, maxSamples)];
         var output = new List<float>(Math.Min(buffer.Length, 262_144));
         while (true)
@@ -31,8 +36,8 @@ internal static class DecoderSupport
             await Task.Yield();
         }
         var decoded = new PcmAudio(format, output.ToArray());
-        return request.TargetFormat is { } target && target != format
-            ? ConvertFormat(decoded, target, maxBytes)
+        return request.TargetFormat is { } targetFormat && targetFormat != format
+            ? ConvertFormat(decoded, targetFormat, maxBytes)
             : decoded;
     }
 
@@ -42,7 +47,7 @@ internal static class DecoderSupport
         if (source.FrameCount == 0) return new PcmAudio(target, Array.Empty<float>());
         var frames = (long)Math.Ceiling(source.FrameCount * (double)target.SampleRate / source.Format.SampleRate);
         var samples = checked(frames * target.Channels);
-        if (samples * sizeof(float) > maxBytes) throw new InvalidDataException("Konvertierter Clip überschreitet 128 MiB PCM-Limit.");
+        if (samples * sizeof(float) > maxBytes) throw new PcmClipTooLargeException();
         var result = new float[samples];
         for (var frame = 0L; frame < frames; frame++)
         {

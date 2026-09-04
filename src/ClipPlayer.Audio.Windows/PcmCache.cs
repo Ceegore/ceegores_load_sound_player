@@ -65,12 +65,22 @@ public sealed class PcmCache : IDisposable
     }
 
     public bool Put(CacheKey key, PcmAudio audio)
+        => Put(key, audio, null);
+
+    /// <summary>Commits PCM and its protection set under one lock before eviction runs.</summary>
+    public bool Put(CacheKey key, PcmAudio audio, IEnumerable<CacheKey>? protectedKeys)
     {
         ArgumentNullException.ThrowIfNull(audio);
         if (audio.ByteCount > _options.MaxClipBytes) return false;
         lock (_gate)
         {
             ThrowIfDisposed();
+            if (protectedKeys is not null)
+            {
+                _protected.Clear();
+                foreach (var protectedKey in protectedKeys) _protected.Add(protectedKey);
+                _anchor = _protected.FirstOrDefault();
+            }
             RemoveCore(key);
             var node = _lru.AddFirst(new Entry(key, audio));
             _entries[key] = node;

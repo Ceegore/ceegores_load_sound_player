@@ -79,6 +79,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IAsyncDisposable
         var valid = paths.Where(AudioFileRules.IsSupported).Where(File.Exists).Select(x => new ClipItem(x)).ToArray();
         Items.Clear();
         foreach (var item in valid) Items.Add(item);
+        OnPropertyChanged(nameof(CanSeek));
         RefreshNavigationCommands();
         if (Items.Count == 0) { SelectedIndex = -1; Status = "Keine unterstützten Dateien"; return; }
         var targetIndex = Math.Clamp(selectedIndex, 0, Items.Count - 1);
@@ -91,6 +92,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IAsyncDisposable
             {
                 Duration = _player.Duration;
                 Position = _player.Position;
+                OnPropertyChanged(nameof(CanSeek));
                 Status = SelectedItem?.Name ?? "";
                 return;
             }
@@ -202,6 +204,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IAsyncDisposable
                     CancellationToken.None).ConfigureAwait(true);
                 if (playlist.HandlesSelectionAtomically)
                 {
+                    OnPropertyChanged(nameof(CanSeek));
                     Status = SelectedItem?.Name ?? "";
                     return;
                 }

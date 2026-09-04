@@ -69,6 +69,36 @@ public sealed class PlaybackCoordinatorTests
     }
 
     [Fact]
+    public async Task StaleTrackEndedEventCannotAdvanceAReplacedPlaylist()
+    {
+        var output = new RecordingOutput();
+        var old = CoreFixtures.Track("old");
+        await using var coordinator = new PlaybackCoordinator(new RecordingDecoder(), output);
+        await coordinator.ReplacePlaylistAsync([old, CoreFixtures.Track("old-next")]);
+        var oldRevision = coordinator.PlaylistRevision;
+        var oldSelection = coordinator.Snapshot.SelectionGeneration;
+        await coordinator.ReplacePlaylistAsync([CoreFixtures.Track("new"), CoreFixtures.Track("new-next")]);
+
+        await coordinator.NotifyTrackEndedAsync(old, oldRevision, oldSelection);
+
+        Assert.Equal("new.wav", coordinator.Snapshot.CurrentTrack!.FileName);
+        Assert.Equal(PlaybackState.Playing, coordinator.Snapshot.State);
+        Assert.Equal(2, output.Started.Count);
+    }
+
+    [Fact]
+    public async Task PlaybackFaultIsVisibleAndStopsOutput()
+    {
+        var output = new RecordingOutput();
+        await using var coordinator = new PlaybackCoordinator(new RecordingDecoder(), output);
+        await coordinator.ReplacePlaylistAsync([CoreFixtures.Track("one")]);
+        await coordinator.NotifyPlaybackFaultAsync(new IOException("device lost"));
+        Assert.Equal(PlaybackState.Faulted, coordinator.Snapshot.State);
+        Assert.Contains("device lost", coordinator.Snapshot.Error);
+        Assert.Equal(2, output.StopCount);
+    }
+
+    [Fact]
     public async Task PreloadRequestsUpToThreeFollowingTracks()
     {
         var decoder = new RecordingDecoder();

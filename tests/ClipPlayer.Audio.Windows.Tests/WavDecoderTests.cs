@@ -66,7 +66,27 @@ public sealed class WavDecoderTests
         }
     }
 
-    private static void WriteSparsePcmWave(string path, int dataBytes)
+    [Fact]
+    public async Task TargetMixFormatOversizeUsesStreamingBeforeResample()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"clipplayer-target-large-{Guid.NewGuid():N}.wav");
+        try
+        {
+            WriteSparsePcmWave(path, 129 * 1024 * 1024, 44_100, 1);
+            var target = new AudioFormat(48_000, 2);
+            var decoder = new WindowsTrackDecoder(new DecoderRegistry([new WavDecoder()]), target);
+            var track = ClipPlayer.Core.Track.Create(path, new FileInfo(path).Length, File.GetLastWriteTimeUtc(path));
+            var decoded = await decoder.DecodeAsync(track, CancellationToken.None);
+            Assert.True(decoded.IsStreaming);
+            await decoded.Stream!.DisposeAsync();
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    private static void WriteSparsePcmWave(string path, int dataBytes, int sampleRate = 8_000, short channels = 1)
     {
         using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
         using var writer = new BinaryWriter(stream);
@@ -76,10 +96,10 @@ public sealed class WavDecoderTests
         writer.Write(0x20746D66); // fmt 
         writer.Write(16);
         writer.Write((short)1);
-        writer.Write((short)1);
-        writer.Write(8_000);
-        writer.Write(16_000);
-        writer.Write((short)2);
+        writer.Write(channels);
+        writer.Write(sampleRate);
+        writer.Write(sampleRate * channels * 2);
+        writer.Write((short)(channels * 2));
         writer.Write((short)16);
         writer.Write(0x61746164); // data
         writer.Write(dataBytes);

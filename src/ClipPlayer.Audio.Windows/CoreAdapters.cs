@@ -69,7 +69,8 @@ public sealed class WindowsPcmCache(PcmCache cache, AudioFormat mixFormat, Decod
         cancellationToken.ThrowIfCancellationRequested();
         var format = new AudioFormat(audio.SampleRate, audio.Channels);
         if (format != mixFormat) throw new ArgumentException("PCM muss dem festen Mixformat entsprechen.", nameof(audio));
-        cache.Put(CacheKey.For(ToLocal(track), mixFormat), new PcmAudio(format, audio.Samples));
+        var key = CacheKey.For(ToLocal(track), mixFormat);
+        cache.Put(key, new PcmAudio(format, audio.Samples), [key]);
         return ValueTask.CompletedTask;
     }
 
@@ -121,7 +122,11 @@ public sealed class CoreAudioOutputAdapter(IAudioOutput output) : ClipPlayer.Cor
         else
         {
             var format = new AudioFormat(audio.SampleRate, audio.Channels);
-            output.SwitchTo(new PcmAudio(format, audio.Samples), startAt);
+            if (output is WasapiPlaybackOutput wasapi) wasapi.StopPlayback();
+            if (output is WasapiPlaybackOutput trackedOutput)
+                trackedOutput.SwitchTo(track, new PcmAudio(format, audio.Samples), startAt);
+            else
+                output.SwitchTo(new PcmAudio(format, audio.Samples), startAt);
             output.Play();
         }
     }

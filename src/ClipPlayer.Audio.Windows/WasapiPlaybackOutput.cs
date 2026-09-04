@@ -17,6 +17,8 @@ public sealed class WasapiPlaybackOutput : IStreamingAudioOutput
     private int _ignoreStopped;
     private int _trackEndedRaised;
     private bool _disposed;
+    private long _pendingRevision;
+    private long _pendingSelectionGeneration;
 
     public WasapiPlaybackOutput(AudioFormat format, int latencyMilliseconds = 150)
     {
@@ -36,16 +38,27 @@ public sealed class WasapiPlaybackOutput : IStreamingAudioOutput
     public TimeSpan Position => _provider.Position;
     public TimeSpan Duration => _provider.Duration;
     public double Volume { get => _output?.Volume ?? _volume; set { _volume = (float)Math.Clamp(value, 0, 1); if (_output is not null) _output.Volume = _volume; } }
-    public event EventHandler? TrackEnded;
+    public event EventHandler<PlaybackEndedEventArgs>? TrackEnded;
+    public event EventHandler<PlaybackFaultEventArgs>? PlaybackFaulted;
     public event EventHandler? DeviceChanged;
 
+    public void SetPlaybackIdentity(long revision, long selectionGeneration)
+    {
+        Volatile.Write(ref _pendingRevision, revision);
+        Volatile.Write(ref _pendingSelectionGeneration, selectionGeneration);
+    }
+
     public void SwitchTo(PcmAudio? audio, TimeSpan startAt = default)
+        => SwitchTo(null, audio, startAt);
+
+    public void SwitchTo(ClipPlayer.Core.Track? track, PcmAudio? audio, TimeSpan startAt = default)
     {
         ThrowIfDisposed();
         DisposeActiveStream();
         Volatile.Write(ref _ignoreStopped, 0);
         Volatile.Write(ref _trackEndedRaised, 0);
-        _provider.SwitchTo(audio, startAt);
+        _provider.SwitchTo(track, audio, startAt, Volatile.Read(ref _pendingRevision),
+            Volatile.Read(ref _pendingSelectionGeneration));
     }
 
     public async ValueTask PlayStreamingAsync(ClipPlayer.Core.Track track, ClipPlayer.Core.IStreamingAudio audio, TimeSpan startAt, CancellationToken cancellationToken)
@@ -54,10 +67,12 @@ public sealed class WasapiPlaybackOutput : IStreamingAudioOutput
         cancellationToken.ThrowIfCancellationRequested();
         if (audio.SampleRate != Format.SampleRate || audio.Channels != Format.Channels)
             throw new ArgumentException("Streaming-Mixformat stimmt nicht mit der Ausgabe überein.", nameof(audio));
+        StopPlayback();
         await audio.PrimeAsync(cancellationToken).ConfigureAwait(false);
         var previous = Interlocked.Exchange(ref _activeStream, audio);
         if (previous is not null && !ReferenceEquals(previous, audio)) await previous.DisposeAsync().ConfigureAwait(false);
-        _provider.SwitchToStreaming(audio, startAt);
+        _provider.SwitchToStreaming(track, audio, startAt, Volatile.Read(ref _pendingRevision),
+            Volatile.Read(ref _pendingSelectionGeneration));
         Volatile.Write(ref _ignoreStopped, 0);
         Volatile.Write(ref _trackEndedRaised, 0);
         Play();
@@ -111,9 +126,16 @@ public sealed class WasapiPlaybackOutput : IStreamingAudioOutput
 
     private void OnPlaybackStopped(object? sender, StoppedEventArgs e)
     {
+        var failure = e.Exception ?? _provider.Failure;
+        if (failure is not null)
+        {
+            PlaybackFaulted?.Invoke(this, new PlaybackFaultEventArgs(failure));
+            return;
+        }
         if (Volatile.Read(ref _ignoreStopped) == 0 && _provider.EndOfStream &&
             Interlocked.Exchange(ref _trackEndedRaised, 1) == 0)
-            TrackEnded?.Invoke(this, EventArgs.Empty);
+            TrackEnded?.Invoke(this, new PlaybackEndedEventArgs(_provider.CurrentTrack,
+                _provider.CurrentRevision, _provider.CurrentSelectionGeneration));
     }
 
     private sealed class DefaultDeviceNotification(WasapiPlaybackOutput owner) : IMMNotificationClient
@@ -149,4 +171,17 @@ public sealed class WasapiPlaybackOutput : IStreamingAudioOutput
         _deviceEnumerator.Dispose();
         _provider.Dispose();
     }
+}
+
+public sealed class PlaybackEndedEventArgs(ClipPlayer.Core.Track? track, long revision,
+    long selectionGeneration) : EventArgs
+{
+    public ClipPlayer.Core.Track? Track { get; } = track;
+    public long Revision { get; } = revision;
+    public long SelectionGeneration { get; } = selectionGeneration;
+}
+
+public sealed class PlaybackFaultEventArgs(Exception error) : EventArgs
+{
+    public Exception Error { get; } = error;
 }

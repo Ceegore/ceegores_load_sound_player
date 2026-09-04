@@ -23,6 +23,20 @@ public sealed class PcmCacheTests
     }
 
     [Fact]
+    public void PutProtectsNewCurrentBeforeBudgetEviction()
+    {
+        using var cache = new PcmCache(new PcmCacheOptions { MemoryBudgetBytes = 16, MaxClipBytes = 16 });
+        var format = new AudioFormat(8_000, 1);
+        var old = CacheKey.For(NewTrack(), format);
+        var current = CacheKey.For(NewTrack(), format);
+        cache.Put(old, Audio(format, 4));
+        cache.Protect([old]);
+
+        Assert.True(cache.Put(current, Audio(format, 4), [current]));
+        Assert.True(cache.TryGet(current, out _));
+    }
+
+    [Fact]
     public async Task PreloadLoadsCurrentAndThreeSuccessorsOnce()
     {
         using var cache = new PcmCache();

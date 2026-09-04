@@ -101,6 +101,23 @@ public sealed class MainViewModelTests
         Assert.Contains("b.wav", model.Status);
     }
 
+    [Fact]
+    public async Task CanSeekNotifiesWhenStreamingStateChanges()
+    {
+        using var files = new TempFiles("a.wav");
+        var player = new FakePlaybackPort { CanSeek = false };
+        await using var model = new MainViewModel(player);
+        var changes = 0;
+        model.PropertyChanged += (_, args) => { if (args.PropertyName == nameof(model.CanSeek)) changes++; };
+        await model.SetItemsAsync(files.Paths);
+        player.CanSeek = true;
+        player.Publish(new PlaybackSnapshot(PlaybackState.Playing, Track.Create(files.Paths[0]), 0,
+            SelectionGeneration.Initial, TimeSpan.Zero, null));
+
+        Assert.True(model.CanSeek);
+        Assert.True(changes >= 2);
+    }
+
     private static readonly string[] ExpectedNames = ["clip1.flac", "clip2.mp3", "clip10.wav"];
 
     private sealed class TempFiles : IDisposable
@@ -124,6 +141,7 @@ public sealed class MainViewModelTests
         public TimeSpan Position { get; set; }
         public TimeSpan Duration { get; set; } = TimeSpan.FromSeconds(10);
         public bool IsPlaying { get; protected set; }
+        public bool CanSeek { get; set; } = true;
         public double Volume { get; set; } = 1;
         public virtual Task PlayAsync(string path, CancellationToken cancellationToken) { CurrentPath = path; IsPlaying = true; return Task.CompletedTask; }
         public Task PauseAsync(CancellationToken cancellationToken) { IsPlaying = false; return Task.CompletedTask; }

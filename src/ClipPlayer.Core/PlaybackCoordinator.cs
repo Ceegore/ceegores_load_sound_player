@@ -18,6 +18,7 @@ public sealed class PlaybackCoordinator : IAsyncDisposable
     private PlaybackSnapshot _snapshot = PlaybackSnapshot.Empty;
     private CancellationTokenSource _selectionCancellation = new();
     private bool _disposed;
+    private long _playlistRevision;
 
     public PlaybackCoordinator(
         ITrackDecoder? decoder = null,
@@ -33,6 +34,7 @@ public sealed class PlaybackCoordinator : IAsyncDisposable
 
     public Playlist Playlist => _playlist;
     public PlaybackSnapshot Snapshot => _snapshot;
+    public long PlaylistRevision => Volatile.Read(ref _playlistRevision);
     public event EventHandler<PlaybackSnapshot>? SnapshotChanged;
 
     public ValueTask InitializeAsync(CancellationToken cancellationToken = default) =>
@@ -120,11 +122,34 @@ public sealed class PlaybackCoordinator : IAsyncDisposable
         });
 
     public async ValueTask NotifyTrackEndedAsync(CancellationToken cancellationToken = default)
+        => await NotifyTrackEndedAsync(null, PlaylistRevision, null, cancellationToken).ConfigureAwait(false);
+
+    public async ValueTask NotifyTrackEndedAsync(Track? endedTrack, long expectedRevision,
+        SelectionGeneration? expectedSelection, CancellationToken cancellationToken = default)
     {
         var next = await _commands.EnqueueAsync(() =>
-            new ValueTask<int>(_playlist.CanMoveNext ? _playlist.CurrentIndex + 1 : -1)).ConfigureAwait(false);
+        {
+            if (expectedRevision != PlaylistRevision ||
+                (expectedSelection is { } selection && _snapshot.SelectionGeneration != selection) ||
+                (endedTrack is not null && _playlist.Current != endedTrack))
+                return new ValueTask<int>(-2);
+            return new ValueTask<int>(_playlist.CanMoveNext ? _playlist.CurrentIndex + 1 : -1);
+        }).ConfigureAwait(false);
+        if (next == -2) return;
         if (next >= 0) await SelectAsync(next, cancellationToken).ConfigureAwait(false);
         else await StopAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public ValueTask NotifyPlaybackFaultAsync(Exception exception, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        return _commands.EnqueueAsync(async () =>
+        {
+            InvalidateActiveSelection();
+            try { await _output.StopAsync(cancellationToken).ConfigureAwait(false); }
+            catch { /* preserve the decoder/device failure as the visible fault */ }
+            SetSnapshot(_snapshot with { State = PlaybackState.Faulted, Error = exception.Message });
+        });
     }
 
     public async ValueTask DeleteCurrentAsync(CancellationToken cancellationToken = default)
@@ -152,6 +177,7 @@ public sealed class PlaybackCoordinator : IAsyncDisposable
         {
             var index = _playlist.ToList().FindIndex(track => track == target.Item1);
             if (index < 0) return new ValueTask<int>(-1);
+            Interlocked.Increment(ref _playlistRevision);
             _playlist = _playlist.RemoveAt(index, out var nextIndex);
             if (nextIndex < 0) SetSnapshot(PlaybackSnapshot.Empty);
             else SetSnapshot(_snapshot with { CurrentTrack = _playlist[nextIndex], CurrentIndex = nextIndex, State = PlaybackState.Stopped, Error = null });
@@ -179,11 +205,12 @@ public sealed class PlaybackCoordinator : IAsyncDisposable
 
     private async ValueTask ReplaceCoreAsync(Playlist replacement)
     {
+        Interlocked.Increment(ref _playlistRevision);
         _playlist = replacement;
         InvalidateActiveSelection();
+        await _output.StopAsync(CancellationToken.None).ConfigureAwait(false);
         if (replacement.Count == 0)
         {
-            await _output.StopAsync(CancellationToken.None).ConfigureAwait(false);
             SetSnapshot(PlaybackSnapshot.Empty);
         }
     }
