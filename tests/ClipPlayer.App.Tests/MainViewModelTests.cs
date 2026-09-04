@@ -110,12 +110,13 @@ public sealed class MainViewModelTests
         var changes = 0;
         model.PropertyChanged += (_, args) => { if (args.PropertyName == nameof(model.CanSeek)) changes++; };
         await model.SetItemsAsync(files.Paths);
+        changes = 0;
         player.CanSeek = true;
         player.Publish(new PlaybackSnapshot(PlaybackState.Playing, Track.Create(files.Paths[0]), 0,
             SelectionGeneration.Initial, TimeSpan.Zero, null));
 
         Assert.True(model.CanSeek);
-        Assert.True(changes >= 2);
+        Assert.Equal(1, changes);
     }
 
     private static readonly string[] ExpectedNames = ["clip1.flac", "clip2.mp3", "clip10.wav"];

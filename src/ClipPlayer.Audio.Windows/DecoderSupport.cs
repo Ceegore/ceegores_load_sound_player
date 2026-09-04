@@ -19,8 +19,8 @@ internal static class DecoderSupport
         if (!target.IsValid) throw new ArgumentOutOfRangeException(nameof(request));
         const long maxBytes = 128L * 1024 * 1024;
         var maxSamples = maxBytes / sizeof(float);
-        var sourceBytes = source.TotalTime.TotalSeconds * format.BlockAlign;
-        var targetBytes = source.TotalTime.TotalSeconds * target.BlockAlign;
+        var sourceBytes = EstimatePcmBytes(source.TotalTime, format);
+        var targetBytes = EstimatePcmBytes(source.TotalTime, target);
         // Decide before allocating/decoding. This also covers a small mono source
         // whose fixed 48 kHz stereo mix would cross the PCM budget after conversion.
         if (sourceBytes > maxBytes || targetBytes > maxBytes) throw new PcmClipTooLargeException();
@@ -69,6 +69,9 @@ internal static class DecoderSupport
         }
         return new PcmAudio(target, result);
     }
+
+    private static double EstimatePcmBytes(TimeSpan duration, AudioFormat format) =>
+        duration.TotalSeconds * format.SampleRate * format.Channels * AudioFormat.BytesPerSample;
 
     private static double Lerp(float left, float right, double fraction) => left + (right - left) * fraction;
 }

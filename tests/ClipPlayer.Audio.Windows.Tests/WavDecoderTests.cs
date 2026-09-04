@@ -86,6 +86,33 @@ public sealed class WavDecoderTests
         }
     }
 
+    [Fact]
+    public async Task ModerateSourceCanSelectStreamingAfterTargetMixExpansion()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"clipplayer-target-moderate-{Guid.NewGuid():N}.wav");
+        try
+        {
+            const int sourceBytes = 50 * 1024 * 1024;
+            WriteSparsePcmWave(path, sourceBytes, 44_100, 1);
+            var target = new AudioFormat(48_000, 2);
+            var decoder = new WindowsTrackDecoder(new DecoderRegistry([new WavDecoder()]), target);
+            var track = ClipPlayer.Core.Track.Create(path, new FileInfo(path).Length, File.GetLastWriteTimeUtc(path));
+
+            var durationSeconds = sourceBytes / (double)(44_100 * 2);
+            Assert.InRange(durationSeconds * 44_100 * 1 * sizeof(float), 0, 128d * 1024 * 1024);
+            Assert.True(durationSeconds * target.SampleRate * target.Channels * sizeof(float) > 128d * 1024 * 1024);
+
+            var decoded = await decoder.DecodeAsync(track, CancellationToken.None);
+
+            Assert.True(decoded.IsStreaming);
+            await decoded.Stream!.DisposeAsync();
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
     private static void WriteSparsePcmWave(string path, int dataBytes, int sampleRate = 8_000, short channels = 1)
     {
         using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read);

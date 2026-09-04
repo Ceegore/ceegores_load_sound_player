@@ -40,7 +40,7 @@ powershell -NoProfile -File .\scripts\run-audio-stress.ps1 -CpuWorkerCap 8 -CpuW
 Die Performance-Tests prüfen 1.000 deterministisch wechselnde Selection-Befehle durch
 den Cache-Port sowie 1.000 Preload-Anfragen am echten `PcmCache`. Geprüft werden
 Provider-/Cache-Hits, maximal vier Einträge, Cachebudget, Decoder-Wiederverwendung,
-kein veralteter Track und p95 <= 100 ms für den hardwarefreien Selection-Pfad.
+kein veralteter Track und p95 <= 50 ms für den hardwarefreien Selection-Pfad.
 
 ## Coverage ist ein separates Qualitäts-Gate
 

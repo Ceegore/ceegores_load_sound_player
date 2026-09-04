@@ -243,6 +243,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IAsyncDisposable
             IsPaused = snapshot.State == PlaybackState.Paused;
             Position = snapshot.Position;
             Duration = _player.Duration;
+            OnPropertyChanged(nameof(CanSeek));
             OnPropertyChanged(nameof(PositionRatio));
             OnPropertyChanged(nameof(PositionText));
             OnPropertyChanged(nameof(DurationText));
