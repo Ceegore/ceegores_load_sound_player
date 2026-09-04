@@ -28,6 +28,8 @@ public sealed class SwitchablePcmProvider : IWaveProvider, IDisposable
     public TimeSpan Position => Volatile.Read(ref _slot) is { } slot
         ? TimeSpan.FromSeconds((double)Volatile.Read(ref slot.Position) / _format.Channels / _format.SampleRate)
         : TimeSpan.Zero;
+    public TimeSpan Duration => Volatile.Read(ref _slot) is { } slot ? slot.Audio.Duration : TimeSpan.Zero;
+    public bool EndOfStream => Volatile.Read(ref _slot) is { } slot && Volatile.Read(ref slot.Position) >= slot.Audio.Samples.Length;
 
     public void SwitchTo(PcmAudio? audio, TimeSpan startAt = default)
     {
@@ -40,6 +42,15 @@ public sealed class SwitchablePcmProvider : IWaveProvider, IDisposable
             slot.Position = checked((int)(frame * _format.Channels));
         }
         Interlocked.Exchange(ref _slot, slot);
+    }
+
+    public void Seek(TimeSpan position)
+    {
+        ThrowIfDisposed();
+        var slot = Volatile.Read(ref _slot);
+        if (slot is null) return;
+        var frame = Math.Clamp((long)(position.TotalSeconds * _format.SampleRate), 0, slot.Audio.FrameCount);
+        Volatile.Write(ref slot.Position, checked((int)(frame * _format.Channels)));
     }
 
     public int Read(byte[] buffer, int offset, int count)

@@ -9,8 +9,13 @@
     <AssemblyName>ClipPlayer.App</AssemblyName>
     <RootNamespace>ClipPlayer.App</RootNamespace>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <RestoreLockedMode>true</RestoreLockedMode>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="ClipPlayer.App.Tests" />
+    <ProjectReference Include="..\ClipPlayer.Core\ClipPlayer.Core.csproj" />
+    <ProjectReference Include="..\ClipPlayer.Audio.Windows\ClipPlayer.Audio.Windows.csproj" />
   </ItemGroup>
 </Project>

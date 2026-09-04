@@ -9,6 +9,7 @@ public sealed class WasapiPlaybackOutput : IAudioOutput
     private readonly int _latencyMilliseconds;
     private readonly SwitchablePcmProvider _provider;
     private WasapiOut? _output;
+    private float _volume = 1;
     private bool _disposed;
 
     public WasapiPlaybackOutput(AudioFormat format, int latencyMilliseconds = 150)
@@ -22,6 +23,10 @@ public sealed class WasapiPlaybackOutput : IAudioOutput
 
     public AudioFormat Format { get; }
     public bool IsPlaying => _output?.PlaybackState == PlaybackState.Playing;
+    public TimeSpan Position => _provider.Position;
+    public TimeSpan Duration => _provider.Duration;
+    public double Volume { get => _output?.Volume ?? _volume; set { _volume = (float)Math.Clamp(value, 0, 1); if (_output is not null) _output.Volume = _volume; } }
+    public event EventHandler? TrackEnded;
 
     public void SwitchTo(PcmAudio? audio, TimeSpan startAt = default)
     {
@@ -48,10 +53,17 @@ public sealed class WasapiPlaybackOutput : IAudioOutput
         _output?.Stop();
     }
 
+    public void Seek(TimeSpan position)
+    {
+        ThrowIfDisposed();
+        _provider.Seek(position);
+    }
+
     /// <summary>Recreates the shared output after a default-device or device-loss notification.</summary>
     public void ReinitializeAfterDeviceChange()
     {
         ThrowIfDisposed();
+        if (_output is not null) _output.PlaybackStopped -= OnPlaybackStopped;
         _output?.Dispose();
         _output = null;
         EnsureInitialized();
@@ -62,6 +74,13 @@ public sealed class WasapiPlaybackOutput : IAudioOutput
         if (_output is not null) return;
         _output = new WasapiOut(AudioClientShareMode.Shared, useEventSync: true, latency: _latencyMilliseconds);
         _output.Init(_provider);
+        _output.Volume = _volume;
+        _output.PlaybackStopped += OnPlaybackStopped;
+    }
+
+    private void OnPlaybackStopped(object? sender, StoppedEventArgs e)
+    {
+        if (_provider.EndOfStream) TrackEnded?.Invoke(this, EventArgs.Empty);
     }
 
     private void ThrowIfDisposed() { ObjectDisposedException.ThrowIf(_disposed, this); }
@@ -70,6 +89,7 @@ public sealed class WasapiPlaybackOutput : IAudioOutput
     {
         if (_disposed) return;
         _disposed = true;
+        if (_output is not null) _output.PlaybackStopped -= OnPlaybackStopped;
         _output?.Dispose();
         _provider.Dispose();
     }

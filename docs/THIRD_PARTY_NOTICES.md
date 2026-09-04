@@ -2,7 +2,8 @@
 
 ClipPlayer.Core enthält keine Drittanbieter-Laufzeitbibliothek. Der Windows-Audioadapter verwendet NAudio; die übrigen zentral fixierten Pakete werden nur für lokale/CI-Tests verwendet und sind nicht Bestandteil eines Kundenpakets:
 
-- NAudio 2.2.1 — MIT — https://github.com/naudio/NAudio (Windows-Audioadapter)
+- NAudio.Core 2.2.1 — MIT — https://github.com/naudio/NAudio (Wave-/PCM-Basis)
+- NAudio.Wasapi 2.2.1 — MIT — https://github.com/naudio/NAudio (WASAPI/Media Foundation)
 
 - Microsoft.NET.Test.Sdk 17.13.0 — MIT — https://github.com/microsoft/vstest
 - xunit 2.9.3 — Apache-2.0 — https://github.com/xunit/xunit

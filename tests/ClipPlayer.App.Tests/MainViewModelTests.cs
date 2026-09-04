@@ -58,6 +58,16 @@ public sealed class MainViewModelTests
         Assert.False(AudioFileRules.IsSupported("track.ogg"));
     }
 
+    [Fact]
+    public async Task RealPortBuildsCorePlaylistWithoutOpeningDeviceUntilPlayback()
+    {
+        using var files = new TempFiles("one.wav", "two.wav");
+        await using var port = new CorePlaybackPort();
+        await port.SetPlaylistAsync(files.Paths, CancellationToken.None);
+        Assert.False(port.IsPlaying);
+        Assert.Equal(TimeSpan.Zero, port.Position);
+    }
+
     private static readonly string[] ExpectedNames = ["clip1.flac", "clip2.mp3", "clip10.wav"];
 
     private sealed class TempFiles : IDisposable

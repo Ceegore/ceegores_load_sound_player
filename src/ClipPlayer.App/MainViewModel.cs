@@ -75,6 +75,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IAsyncDisposable
         Items.Clear();
         foreach (var item in valid) Items.Add(item);
         if (Items.Count == 0) { SelectedIndex = -1; Status = "Keine unterstützten Dateien"; return; }
+        if (_player is IPlaylistPlaybackPort playlist)
+            await playlist.SetPlaylistAsync(Items.Select(item => item.Path).ToArray(), CancellationToken.None).ConfigureAwait(true);
         await SelectAsync(Math.Clamp(selectedIndex, 0, Items.Count - 1)).ConfigureAwait(true);
     }
 
@@ -168,6 +170,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IAsyncDisposable
             _recycleBin.SendToRecycleBin(item.Path);
             Items.RemoveAt(oldIndex);
             if (Items.Count == 0) { SelectedIndex = -1; Status = "Keine Datei geöffnet"; return; }
+            if (_player is IPlaylistPlaybackPort playlist)
+                await playlist.SetPlaylistAsync(Items.Select(current => current.Path).ToArray(), CancellationToken.None).ConfigureAwait(true);
             await SelectAsync(Math.Min(oldIndex, Items.Count - 1)).ConfigureAwait(true);
         }
         catch (Exception ex) { Status = $"Löschen fehlgeschlagen: {ex.Message}"; }

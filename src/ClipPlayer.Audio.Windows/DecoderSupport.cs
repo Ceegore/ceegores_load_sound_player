@@ -32,6 +32,7 @@ internal static class DecoderSupport
     private static PcmAudio ConvertFormat(PcmAudio source, AudioFormat target, long maxBytes)
     {
         if (!target.IsValid) throw new ArgumentOutOfRangeException(nameof(target));
+        if (source.FrameCount == 0) return new PcmAudio(target, Array.Empty<float>());
         var frames = (long)Math.Ceiling(source.FrameCount * (double)target.SampleRate / source.Format.SampleRate);
         var samples = checked(frames * target.Channels);
         if (samples * sizeof(float) > maxBytes) throw new InvalidDataException("Konvertierter Clip überschreitet 128 MiB PCM-Limit.");

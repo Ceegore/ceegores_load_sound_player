@@ -5,6 +5,7 @@
   </PropertyGroup>
   <ItemGroup>
     <!-- NAudio 2.2.1 is the stable MIT release selected by the Phase 2 package gate. -->
-    <PackageVersion Include="NAudio" Version="2.2.1" />
+    <PackageVersion Include="NAudio.Core" Version="2.2.1" />
+    <PackageVersion Include="NAudio.Wasapi" Version="2.2.1" />
   </ItemGroup>
 </Project>

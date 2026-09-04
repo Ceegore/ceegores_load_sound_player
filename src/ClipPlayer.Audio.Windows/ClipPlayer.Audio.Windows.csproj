@@ -7,8 +7,9 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
-    <!-- Stable MIT-licensed NAudio API; no preview or native codec bundle. -->
-    <PackageReference Include="NAudio" />
+    <!-- Minimal stable MIT packages; no preview or native codec bundle. -->
+    <PackageReference Include="NAudio.Core" />
+    <PackageReference Include="NAudio.Wasapi" />
     <ProjectReference Include="..\ClipPlayer.Core\ClipPlayer.Core.csproj" />
   </ItemGroup>
 </Project>

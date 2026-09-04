@@ -19,9 +19,10 @@ public sealed class WavDecoderTests
             }
 
             var track = AudioTrack.FromPath(path);
-            var decoded = await new WavDecoder().DecodeAsync(new AudioDecodeRequest(track));
-            Assert.Equal(8_000, decoded.Format.SampleRate);
-            Assert.Equal(1, decoded.Format.Channels);
+            var target = new AudioFormat(16_000, 2);
+            var decoded = await new WavDecoder().DecodeAsync(new AudioDecodeRequest(track, target));
+            Assert.Equal(target, decoded.Format);
+            Assert.Equal(1_600, decoded.FrameCount);
             Assert.NotEmpty(decoded.Samples.ToArray());
 
             File.Delete(path);

@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$Solution = 'ClipPlayer.sln',
+    [string]$CanaryProject = 'tests/ClipPlayer.Core.Tests/ClipPlayer.Core.Tests.csproj',
     [string]$Filter = '',
     [string]$CanaryFilter = 'FullyQualifiedName~ClipPlayer.Core.Tests.PlaybackCoordinatorTests.EmptyPlaylistIsEmptyAndMissingDecoderIsVisible',
     [int]$MaxAttempts = 4,
@@ -28,10 +29,11 @@ function Get-SacEvent([datetime]$started) {
     } catch { return @() }
 }
 
-function Invoke-TestProcess([string]$testFilter, [int]$attempt) {
+function Invoke-TestProcess([string]$testFilter, [int]$attempt, [string]$target = $solutionPath) {
     $stdout = Join-Path $runDirectory "attempt-$attempt.out"
     $stderr = Join-Path $runDirectory "attempt-$attempt.err"
-    $args = @('test', $solutionPath, '--configuration', 'Release', '--no-build', '--logger', 'console;verbosity=normal')
+    $targetPath = if ([IO.Path]::IsPathRooted($target)) { $target } else { Join-Path $root $target }
+    $args = @('test', $targetPath, '--configuration', 'Release', '--no-build', '--logger', 'console;verbosity=normal')
     if ($testFilter) { $args += @('--filter', $testFilter) }
     $started = Get-Date
     $argumentString = ($args | ForEach-Object { '"' + $_.Replace('"', '\"') + '"' }) -join ' '
@@ -54,28 +56,42 @@ function Invoke-TestProcess([string]$testFilter, [int]$attempt) {
     [PSCustomObject]@{ ExitCode = $process.ExitCode; Output = $output; Sac = ($output -match '0x800711C7' -or $events.Count -gt 0); Timeout = $false }
 }
 
+function Resolve-TestTarget([string]$testFilter) {
+    if ($testFilter -match 'ClipPlayer\.Audio\.Windows\.Tests') { return 'tests/ClipPlayer.Audio.Windows.Tests/ClipPlayer.Audio.Windows.Tests.csproj' }
+    if ($testFilter -match 'ClipPlayer\.Core\.Tests') { return 'tests/ClipPlayer.Core.Tests/ClipPlayer.Core.Tests.csproj' }
+    if ($testFilter -match 'ClipPlayer\.App\.Tests') { return 'tests/ClipPlayer.App.Tests/ClipPlayer.App.Tests.csproj' }
+    return $solutionPath
+}
+
 if ($MaxAttempts -lt 1 -or $MaxAttempts -gt 4) { throw 'MaxAttempts muss zwischen 1 und 4 liegen.' }
 Write-Output 'Restore und einmaliger Release-Build starten.'
 & dotnet restore $solutionPath --locked-mode
 if ($LASTEXITCODE -ne 0) { exit 1 }
 & dotnet build $solutionPath --configuration Release --no-restore
 if ($LASTEXITCODE -ne 0) { exit 1 }
+if ([string]::IsNullOrWhiteSpace($CanaryFilter)) { Write-Output 'CanaryFilter darf nicht leer sein.'; exit 3 }
+$canaryName = (($CanaryFilter -split '~')[-1] -split '\.')[-1]
+$canarySource = Get-ChildItem -LiteralPath (Join-Path $root 'tests') -Filter '*.cs' -Recurse -File |
+    Select-String -Pattern $canaryName -SimpleMatch | Select-Object -First 1
+if ($null -eq $canarySource) { Write-Output "Canary-Test nicht gefunden: $CanaryFilter"; exit 3 }
 if ($SettleSeconds -gt 0) { Write-Output "SAC-Settle: $SettleSeconds Sekunden"; Start-Sleep -Seconds $SettleSeconds }
 
 for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
-    $canary = Invoke-TestProcess $CanaryFilter $attempt
+    $canary = Invoke-TestProcess $CanaryFilter $attempt $CanaryProject
     if ($canary.Sac) {
         Write-Warning "SAC/CodeIntegrity blockiert den Canary (Versuch $attempt); kein Testergebnis."
         if ($attempt -lt $MaxAttempts) { Start-Sleep -Seconds (30 * $attempt) }
         continue
     }
     if ($canary.Timeout) { Write-Error 'Canary-Test überschritt das harte Timeout.'; exit 124 }
+    if ($canary.Output -match '(?i)(no test matches|kein test entspricht)') {
+        Write-Output 'Canary-Filter passte zu keinem Test.'; exit 3
+    }
     if ($canary.ExitCode -ne 0) {
-        if (($canary.Output -match '(?i)(no test matches|kein test entspricht)') -and $canary.Output -notmatch '(?im)^\s*(passed|bestanden|failed|fehler)\b') { Write-Error 'Canary-Filter passte zu keinem Test.'; exit 3 }
         $canary.Output | Write-Output
         exit 1
     }
-    $result = Invoke-TestProcess $Filter $attempt
+    $result = Invoke-TestProcess $Filter $attempt (Resolve-TestTarget $Filter)
     $result.Output | Write-Output
     if ($result.Sac) {
         Write-Warning 'SAC/CodeIntegrity blockiert den Testlauf; Exit 42 bedeutet Umgebungs-Nicht-Ergebnis.'
@@ -83,7 +99,8 @@ for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
         continue
     }
     if ($result.Timeout) { Write-Error 'Testlauf überschritt das harte Timeout.'; exit 124 }
-    if (($result.Output -match '(?i)(no test matches|kein test entspricht)') -and $result.Output -notmatch '(?im)^\s*(passed|bestanden|failed|fehler)\b') { exit 3 }
+    if (($result.Output -match '(?i)(no test matches|kein test entspricht)') -and
+        $result.Output -notmatch '(?im)^\s*(passed|bestanden|failed|fehler)\b') { exit 3 }
     exit ([int]$result.ExitCode)
 }
 Write-Error 'SAC/CodeIntegrity blockiert nach maximal vier Versuchen; Tests sind ein Umgebungs-Nicht-Ergebnis.'

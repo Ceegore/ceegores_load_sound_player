@@ -48,6 +48,19 @@
           "Newtonsoft.Json": "13.0.1"
         }
       },
+      "NAudio.Core": {
+        "type": "Transitive",
+        "resolved": "2.2.1",
+        "contentHash": "GgkdP6K/7FqXFo7uHvoqGZTJvW4z8g2IffhOO4JHaLzKCdDOUEzVKtveoZkCuUX8eV2HAINqi7VFqlFndrnz/g=="
+      },
+      "NAudio.Wasapi": {
+        "type": "Transitive",
+        "resolved": "2.2.1",
+        "contentHash": "lFfXoqacZZe0WqNChJgGYI+XV/n/61LzPHT3C1CJp4khoxeo2sziyX5wzNYWeCMNbsWxFvT3b3iXeY1UYjBhZw==",
+        "dependencies": {
+          "NAudio.Core": "2.2.1"
+        }
+      },
       "Newtonsoft.Json": {
         "type": "Transitive",
         "resolved": "13.0.1",
@@ -94,6 +107,21 @@
         }
       },
       "clipplayer.app": {
+        "type": "Project",
+        "dependencies": {
+          "ClipPlayer.Audio.Windows": "[1.0.0, )",
+          "ClipPlayer.Core": "[1.0.0, )"
+        }
+      },
+      "clipplayer.audio.windows": {
+        "type": "Project",
+        "dependencies": {
+          "ClipPlayer.Core": "[1.0.0, )",
+          "NAudio.Core": "[2.2.1, )",
+          "NAudio.Wasapi": "[2.2.1, )"
+        }
+      },
+      "clipplayer.core": {
         "type": "Project"
       }
     }

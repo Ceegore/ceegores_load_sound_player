@@ -3,8 +3,17 @@ using ClipPlayer.Core;
 namespace ClipPlayer.Audio.Windows;
 
 /// <summary>Bridges the platform adapter to the dependency-free Core ports.</summary>
-public sealed class WindowsTrackDecoder(DecoderRegistry registry) : ITrackDecoder
+public sealed class WindowsTrackDecoder : ITrackDecoder
 {
+    private readonly DecoderRegistry _registry;
+    private readonly AudioFormat? _mixFormat;
+
+    public WindowsTrackDecoder(DecoderRegistry registry, AudioFormat? mixFormat = null)
+    {
+        _registry = registry ?? throw new ArgumentNullException(nameof(registry));
+        _mixFormat = mixFormat;
+    }
+
     public ValueTask<DecodedAudio> DecodeAsync(Track track, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(track);
@@ -14,7 +23,7 @@ public sealed class WindowsTrackDecoder(DecoderRegistry registry) : ITrackDecode
 
     private async ValueTask<DecodedAudio> DecodeCoreAsync(AudioTrack track, CancellationToken cancellationToken)
     {
-        var audio = await registry.DecodeAsync(new AudioDecodeRequest(track), cancellationToken).ConfigureAwait(false);
+        var audio = await _registry.DecodeAsync(new AudioDecodeRequest(track, _mixFormat), cancellationToken).ConfigureAwait(false);
         return new DecodedAudio(audio.Samples, audio.Format.SampleRate, audio.Format.Channels);
     }
 
@@ -59,7 +68,7 @@ public sealed class CoreAudioOutputAdapter(IAudioOutput output) : ClipPlayer.Cor
     {
         cancellationToken.ThrowIfCancellationRequested();
         var format = new AudioFormat(audio.SampleRate, audio.Channels);
-        output.SwitchTo(new PcmAudio(format, audio.Samples.ToArray()), startAt);
+        output.SwitchTo(new PcmAudio(format, audio.Samples), startAt);
         output.Play();
         return ValueTask.CompletedTask;
     }
