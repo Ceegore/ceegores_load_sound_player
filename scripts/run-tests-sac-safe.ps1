@@ -80,7 +80,12 @@ if (-not $SkipBuild) {
         (Join-Path $root (Resolve-TestTarget $Filter))
     ) | Select-Object -Unique
     foreach ($buildTarget in $buildTargets) {
-        & dotnet build $buildTarget --configuration Release --runtime win-x64 --no-restore
+        $buildArguments = @('build', $buildTarget, '--configuration', 'Release', '--no-restore')
+        if ($buildTarget -eq (Join-Path $root 'src\ClipPlayer.App\ClipPlayer.App.csproj')) {
+            $buildArguments += @('--runtime', 'win-x64')
+        }
+        # Test lockfiles intentionally remain RID-less; only the app is RID-specific.
+        & dotnet @buildArguments
         if ($LASTEXITCODE -ne 0) { exit 1 }
     }
 } else {

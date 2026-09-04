@@ -79,7 +79,10 @@ if ($IncludePerformance) { $projects.Add('tests\ClipPlayer.Performance.Tests\Cli
 
 Write-Output 'Release-Gate: x64-orientierter Release-Build (WAP wird separat durch VS gebaut)'
 foreach ($project in ($projects | Select-Object -Unique)) {
-    Invoke-NativeChecked 'dotnet' @('build', (Join-Path $root $project), '--configuration', 'Release', '--runtime', 'win-x64', '--no-restore', '--nologo') "Release-Build $project"
+    $buildArgs = @('build', (Join-Path $root $project), '--configuration', 'Release', '--no-restore', '--nologo')
+    if ($project -eq 'src\ClipPlayer.App\ClipPlayer.App.csproj') { $buildArgs += @('--runtime', 'win-x64') }
+    # Test lockfiles intentionally remain RID-less; only the app/publish uses win-x64.
+    Invoke-NativeChecked 'dotnet' $buildArgs "Release-Build $project"
 }
 
 if (-not $SkipTests) {
