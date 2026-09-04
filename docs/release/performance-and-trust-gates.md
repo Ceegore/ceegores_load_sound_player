@@ -108,3 +108,19 @@ Nur ein vollständig signiertes Artefakt auf einem SAC-enforcing System kann das
 Distribution-Trust-Gate schließen. Ein hardwarefreier Test oder Windows-Sandbox-Lauf
 beweist dieses Gate nicht. Rohdaten (ETW/Loopback/Signaturprotokolle) werden außerhalb
 des Quelltrees als Release-Anhang archiviert.
+
+## Lokales Skriptplayer-Gate
+
+Der auf diesem SAC-Rechner verwendbare source-only Laufweg hat ein eigenes echtes
+WPF-/MediaPlayer-Gate:
+
+```powershell
+.\scripts\test-script-player-e2e.ps1 -DurationSeconds 900 -CpuWorkers 4 -ExerciseDelete
+```
+
+Der Test startet das Fenster minimiert und nicht aktiviert. Befehle laufen über eine
+temporäre Datei durch denselben Dispatcher wie Buttons und Tastatur; der globale
+Eingabefokus bleibt unangetastet. Gemessen werden interne Wechseldauer und getrennt die
+Rundreise des Testkanals. Ein Read-only-UIA-Zugriff bestätigt lediglich die reale
+Fenstererstellung. `AppActivate`, `SendKeys`, `SetFocus` und UI-Klickschleifen sind im
+Dauerlauf verboten.

@@ -61,9 +61,14 @@ function Invoke-StaticScriptChecks {
     $releaseDocs = Get-Content (Join-Path $root 'docs\release\performance-and-trust-gates.md') -Raw
     Assert-Condition ($releaseDocs -match '(?i)Coverage ist ein separates Qualitäts-Gate') 'Coverage-Gate muss ausdrücklich getrennt dokumentiert sein.'
     Assert-Condition ($releaseDocs -match '(?i)behauptet keine Coverage') 'Release-Gate darf Coverage nicht als bestanden vortäuschen.'
+    $scriptStress = Get-Content (Join-Path $root 'scripts\test-script-player-e2e.ps1') -Raw
+    Assert-Condition ($scriptStress -notmatch 'AppActivate|SendKeys|SetFocus|InvokePattern') 'Skriptplayer-Dauerlauf darf den globalen Eingabefokus nicht verwenden.'
 }
 
 Invoke-StaticScriptChecks
+Write-Output 'Release-Gate: source-only Skriptplayer-Selftest'
+& powershell.exe -NoLogo -NoProfile -STA -File (Join-Path $root 'src\ClipPlayer.Script\ClipPlayer.ps1') -SelfTest
+if ($LASTEXITCODE -ne 0) { throw "Skriptplayer-Selftest fehlgeschlagen (Exit $LASTEXITCODE)." }
 Write-Output 'Release-Gate: locked restore'
 Invoke-NativeChecked 'dotnet' @('restore', 'ClipPlayer.sln', '--locked-mode', '--nologo') 'Locked Restore'
 
