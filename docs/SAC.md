@@ -10,3 +10,16 @@ Quelle: `C:\Projects\SACsolutions.md`, gelesen am 04.09.2026. Diese Kurzfassung 
 - Testausgabe wird über getrennte Dateien gelesen, nicht durch `Tee-Object` gepiped; der Prozess-Handle wird sofort gecached und der Prozessbaum hat ein hartes Timeout.
 
 Der Wrapper verändert keine Sicherheitsrichtlinie. Bei einem Block sind statische Build-, Struktur- und Zeilenprüfungen weiterhin zulässig; die Blockmeldung wird wahrheitsgemäß dokumentiert.
+
+## Gemessener lokaler Skriptmodus
+
+Am 04.09.2026 startete der source-only WPF-Player erfolgreich im gültig
+Microsoft-signierten Windows-PowerShell-5.1-Host. Dabei wurden keine eigenen PE-Dateien
+geladen, keine Richtlinie verändert und keine Code-Integrity-Ereignisse 3033/3077
+erzeugt. Dieser Pfad ist die lokale Primärarchitektur, solange keine Store-/CA-Signatur
+für den Binärrelease verfügbar ist.
+
+Dauerprüfungen laufen ausschließlich mit `-BackgroundTest`: minimiert,
+`ShowActivated=false`, ohne Taskleisteneintrag und über einen temporären Befehlskanal.
+Auf gemeinsam genutzten Rechnern sind wiederholtes `AppActivate`, `SendKeys`,
+`SetFocus` und UI-Automation-Klickschleifen untersagt.

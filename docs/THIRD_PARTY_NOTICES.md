@@ -2,6 +2,9 @@
 
 ClipPlayer.Core enthält keine Drittanbieter-Laufzeitbibliothek. Der Windows-Audioadapter verwendet NAudio; die übrigen zentral fixierten Pakete werden nur für lokale/CI-Tests verwendet und sind nicht Bestandteil eines Kundenpakets:
 
+Der SAC-kompatible PowerShell-Skriptmodus verwendet ausschließlich mit Windows
+gelieferte Microsoft-Komponenten und enthält keine Drittanbieter-Laufzeitbibliothek.
+
 - NAudio.Core 2.2.1 — MIT — https://github.com/naudio/NAudio (Wave-/PCM-Basis)
 - NAudio.Wasapi 2.2.1 — MIT — https://github.com/naudio/NAudio (WASAPI/Media Foundation)
 
