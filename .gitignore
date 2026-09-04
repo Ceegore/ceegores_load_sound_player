@@ -1,0 +1,15 @@
+**/bin/
+**/obj/
+.vs/
+TestResults/
+*.user
+*.suo
+*.nupkg
+*.snupkg
+*.pdb
+artifacts/
+coverage/
+*.log
+*.cer
+*.pfx
+*.key

@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>ClipPlayer.Core</AssemblyName>
+    <RootNamespace>ClipPlayer.Core</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <NoWarn>CA1711</NoWarn>
+  </PropertyGroup>
+</Project>
