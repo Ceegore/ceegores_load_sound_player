@@ -115,7 +115,7 @@ Der auf diesem SAC-Rechner verwendbare source-only Laufweg hat ein eigenes echte
 WPF-/MediaPlayer-Gate:
 
 ```powershell
-.\scripts\test-script-player-e2e.ps1 -DurationSeconds 900 -CpuWorkers 4 -ExerciseDelete
+.\scripts\test-script-player-e2e.ps1 -DurationSeconds 900 -CpuWorkers 0 -ExerciseDelete
 ```
 
 Der Test startet das Fenster minimiert und nicht aktiviert. Befehle laufen über eine
@@ -123,4 +123,8 @@ temporäre Datei durch denselben Dispatcher wie Buttons und Tastatur; der global
 Eingabefokus bleibt unangetastet. Gemessen werden interne Wechseldauer und getrennt die
 Rundreise des Testkanals. Ein Read-only-UIA-Zugriff bestätigt lediglich die reale
 Fenstererstellung. `AppActivate`, `SendKeys`, `SetFocus` und UI-Klickschleifen sind im
-Dauerlauf verboten.
+Dauerlauf verboten. Auf einem bereits ausgelasteten gemeinsam genutzten Rechner bleibt
+`-CpuWorkers 0`; zusätzliche Worker werden nur auf einem dedizierten Lastrechner
+explizit gewählt. Das Gate prüft außerdem ein fehlgeschlagenes vorgeladenes Medium,
+Recovery, Neustart am Listenende und harte Reaktionsbudgets (interner p95 150 ms,
+Maximum 750 ms, Testkanal-p95 1500 ms).

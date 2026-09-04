@@ -23,3 +23,8 @@ Dauerprüfungen laufen ausschließlich mit `-BackgroundTest`: minimiert,
 `ShowActivated=false`, ohne Taskleisteneintrag und über einen temporären Befehlskanal.
 Auf gemeinsam genutzten Rechnern sind wiederholtes `AppActivate`, `SendKeys`,
 `SetFocus` und UI-Automation-Klickschleifen untersagt.
+
+Ein am 04.09.2026 zunächst erfolgreicher Lauf der unsignierten `ClipPlayer.App.dll`
+wurde nach einem späteren sauberen Build vollständig mit `0x800711C7` blockiert.
+Ein einzelner früher DLL-Pass ist daher kein stabiler Vertrauensnachweis; nach einer
+Settle-Phase erneut prüfen und spätere Blocks als Umgebungs-Nicht-Ergebnis behandeln.

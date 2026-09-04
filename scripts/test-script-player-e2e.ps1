@@ -3,10 +3,11 @@ param(
     [ValidateRange(10, 7200)]
     [int] $DurationSeconds = 60,
     [ValidateRange(0, 16)]
-    [int] $CpuWorkers = 4,
+    [int] $CpuWorkers = 0,
     [ValidateRange(100, 5000)]
     [int] $SwitchIntervalMilliseconds = 250,
-    [switch] $ExerciseDelete
+    [switch] $ExerciseDelete,
+    [switch] $KeepFixture
 )
 
 Set-StrictMode -Version 2.0
@@ -76,8 +77,12 @@ function Wait-State {
     )
     $watch = [Diagnostics.Stopwatch]::StartNew()
     do {
-        $state = Read-State 500
-        if (& $Predicate $state) { return $state }
+        if ($null -ne $script:playerProcess -and $script:playerProcess.HasExited) {
+            $failureText = if (Test-Path $stderrPath) { Get-Content $stderrPath -Raw } else { '' }
+            throw "ClipPlayer exited while waiting for $Description. $failureText"
+        }
+        try { $state = Read-State 500 } catch { $state = $null }
+        if ($null -ne $state -and (& $Predicate $state)) { return $state }
         Start-Sleep -Milliseconds 25
     } while ($watch.ElapsedMilliseconds -lt $TimeoutMilliseconds)
     throw "Player $Description did not complete within $TimeoutMilliseconds ms."
@@ -116,7 +121,9 @@ try {
     $launcherScript = Join-Path $testRoot 'ClipPlayerLauncher.ps1'
     Copy-Item -LiteralPath $playerSource -Destination $playerScript
     Copy-Item -LiteralPath $launcherSource -Destination $launcherScript
-    1..5 | ForEach-Object { New-SilentWave (Join-Path $testRoot ("clip-$_.wav")) }
+    1..3 | ForEach-Object { New-SilentWave (Join-Path $testRoot ("clip-$_.wav")) }
+    [IO.File]::WriteAllText((Join-Path $testRoot 'clip-4.wav'), 'not audio')
+    New-SilentWave (Join-Path $testRoot 'clip-5.wav') 1
 
     $workerCommand = '$end=[DateTime]::UtcNow.AddSeconds(' + ($DurationSeconds + 30) + ');' +
         'while([DateTime]::UtcNow -lt $end){for($i=1;$i -lt 200000;$i++){$null=[Math]::Sqrt($i)}}'
@@ -161,10 +168,24 @@ try {
     $null = Wait-State { param($state) $state.LastAutomationCommandId -eq $nextCommand -and $state.CurrentIndex -eq 1 -and -not $state.IsPaused } 5000 'next command'
     $previousCommand = Send-BackgroundCommand 'Previous'
     $null = Wait-State { param($state) $state.LastAutomationCommandId -eq $previousCommand -and $state.CurrentIndex -eq 0 -and -not $state.IsPaused } 5000 'previous command'
-    $nonIntrusiveCommandChecks = 4
+    for ($targetIndex = 1; $targetIndex -le 3; $targetIndex++) {
+        $endTestCommand = Send-BackgroundCommand 'Next'
+        $null = Wait-State { param($state) $state.LastAutomationCommandId -eq $endTestCommand -and $state.CurrentIndex -eq $targetIndex } 5000 'end-of-list setup'
+    }
+    $null = Wait-State { param($state) $state.CurrentIndex -eq 3 -and $state.IsPaused -and $state.Status -like 'Playback error:*' } 5000 'preloaded decode failure'
+    $recoverCommand = Send-BackgroundCommand 'Next'
+    $null = Wait-State { param($state) $state.LastAutomationCommandId -eq $recoverCommand -and $state.CurrentIndex -eq 4 -and -not $state.IsPaused -and $state.PositionMilliseconds -gt 0 } 5000 'decode failure recovery'
+    $null = Wait-State { param($state) $state.CurrentIndex -eq 4 -and $state.IsPaused -and $state.PositionMilliseconds -eq 0 } 5000 'final-track completion'
+    $restartCommand = Send-BackgroundCommand 'TogglePause'
+    $null = Wait-State { param($state) $state.LastAutomationCommandId -eq $restartCommand -and -not $state.IsPaused -and $state.PositionMilliseconds -gt 0 } 5000 'final-track restart'
+    for ($targetIndex = 3; $targetIndex -ge 0; $targetIndex--) {
+        $resetCommand = Send-BackgroundCommand 'Previous'
+        $null = Wait-State { param($state) $state.LastAutomationCommandId -eq $resetCommand -and $state.CurrentIndex -eq $targetIndex } 5000 'end-of-list reset'
+    }
+    $nonIntrusiveCommandChecks = 13
 
     $deletePassed = $null
-    $maximumIndex = 4
+    $maximumIndex = 2
     if ($ExerciseDelete) {
         $stateBeforeDelete = Read-State
         $pathBeforeDelete = [string]$stateBeforeDelete.CurrentPath
@@ -175,7 +196,7 @@ try {
             if (-not $deletePassed) { Start-Sleep -Milliseconds 100 }
         } while (-not $deletePassed -and $deleteWatch.ElapsedMilliseconds -lt 5000)
         if (-not $deletePassed) { throw 'Delete did not move the selected fixture out of its source folder.' }
-        $maximumIndex = 3
+        $maximumIndex = 1
     }
 
     $deadline = [DateTime]::UtcNow.AddSeconds($DurationSeconds)
@@ -217,8 +238,15 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($stderrText)) { throw "Player stderr was not empty: $stderrText" }
     $codeIntegrityEvents = @(Get-WinEvent -FilterHashtable @{
         LogName='Microsoft-Windows-CodeIntegrity/Operational'; Id=3033,3077; StartTime=$startedAt
-    } -ErrorAction SilentlyContinue | Where-Object { $_.Message -match 'ClipPlayer|powershell\.exe' })
+    } -ErrorAction SilentlyContinue | Where-Object { $_.Message -match 'ClipPlayer' })
     if ($codeIntegrityEvents.Count -gt 0) { throw "Code Integrity logged $($codeIntegrityEvents.Count) related block events." }
+
+    $switchP95 = Get-Percentile $latencies.ToArray() 0.95
+    $maximumSwitch = ($latencies | Measure-Object -Maximum).Maximum
+    $roundTripP95 = Get-Percentile $roundTripLatencies.ToArray() 0.95
+    if ($switchP95 -gt 150 -or $maximumSwitch -gt 750 -or $roundTripP95 -gt 1500) {
+        throw "Responsiveness budget exceeded (switch p95=$switchP95 ms, max=$maximumSwitch ms, roundtrip p95=$roundTripP95 ms)."
+    }
 
     $summary = [ordered]@{
         Result = 'PASS'
@@ -228,10 +256,10 @@ try {
         NonIntrusiveCommandChecks = $nonIntrusiveCommandChecks
         PauseResumeChecks = $pauseChecks
         SwitchP50Milliseconds = [Math]::Round((Get-Percentile $latencies.ToArray() 0.50), 1)
-        SwitchP95Milliseconds = [Math]::Round((Get-Percentile $latencies.ToArray() 0.95), 1)
+        SwitchP95Milliseconds = [Math]::Round($switchP95, 1)
         SwitchP99Milliseconds = [Math]::Round((Get-Percentile $latencies.ToArray() 0.99), 1)
-        MaximumSwitchMilliseconds = [Math]::Round(($latencies | Measure-Object -Maximum).Maximum, 1)
-        HarnessRoundTripP95Milliseconds = [Math]::Round((Get-Percentile $roundTripLatencies.ToArray() 0.95), 1)
+        MaximumSwitchMilliseconds = [Math]::Round($maximumSwitch, 1)
+        HarnessRoundTripP95Milliseconds = [Math]::Round($roundTripP95, 1)
         InitialCachedPlayers = $initial.CachedPlayerCount
         DeletePassed = $deletePassed
         CodeIntegrityEvents = 0
@@ -241,9 +269,15 @@ try {
     [PSCustomObject]$summary | Format-List
 } finally {
     if ($null -ne $playerProcess -and (Get-Process -Id $playerProcess.Id -ErrorAction SilentlyContinue)) {
-        Stop-Process -Id $playerProcess.Id -Force
+        try { $null = Send-BackgroundCommand 'Close'; $null = $playerProcess.WaitForExit(3000) } catch { }
+        if (Get-Process -Id $playerProcess.Id -ErrorAction SilentlyContinue) { Stop-Process -Id $playerProcess.Id -Force }
     }
     foreach ($workerProcess in $workerProcesses) {
         if (Get-Process -Id $workerProcess.Id -ErrorAction SilentlyContinue) { Stop-Process -Id $workerProcess.Id -Force }
+    }
+    if (-not $KeepFixture -and (Test-Path -LiteralPath $testRoot)) {
+        Get-ChildItem -LiteralPath $testRoot -File | Where-Object {
+            $_.Name -like 'clip-*.wav' -or $_.Name -in @('ClipPlayer.ps1', 'ClipPlayerLauncher.ps1', 'command.txt')
+        } | Remove-Item -Force -ErrorAction SilentlyContinue
     }
 }

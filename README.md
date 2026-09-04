@@ -35,11 +35,21 @@ Rueckgaengig machen:
 ## Tests
 
 ```powershell
-.\scripts\test-script-player-e2e.ps1 -DurationSeconds 60 -CpuWorkers 4 -ExerciseDelete
+.\scripts\test-script-player-e2e.ps1 -DurationSeconds 60 -CpuWorkers 0 -ExerciseDelete
 ```
 
-Der Test bedient das reale Fenster, erzeugt nur stumme temporaere WAVs, misst
-Wechsellatenzen und prueft das Code-Integrity-Protokoll. Das Fenster wird dabei
+Der Test bedient das reale Fenster, erzeugt nur stumme temporaere WAVs, prueft auch
+defekte Medien und Neustart am Listenende, misst Wechsellatenzen gegen feste Budgets
+und prueft das Code-Integrity-Protokoll. `-CpuWorkers 0` erzeugt keine zusaetzliche
+Last; fuer einen dedizierten Lastrechner kann ein kleiner positiver Wert gesetzt werden.
+Das Fenster wird dabei
 minimiert und nicht aktiviert; der Test verwendet weder `SendKeys` noch `AppActivate`
 und entzieht anderen Anwendungen nicht den Eingabefokus. Fuer die Release-Gates des
 weiterhin vorhandenen .NET/MSIX-Pfads siehe `scripts\verify-release.ps1`.
+
+Mit installiertem `ffmpeg` prueft der folgende optionale Entwicklungstest die wirklich
+installierte Kopie mit stummen WAV-, MP3- und FLAC-Dateien:
+
+```powershell
+.\scripts\test-installed-formats-e2e.ps1
+```

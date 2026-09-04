@@ -127,5 +127,5 @@ for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
         $result.Output -notmatch '(?im)^\s*(passed|bestanden|failed|fehler)\b') { exit 3 }
     exit ([int]$result.ExitCode)
 }
-Write-Output 'SAC/CodeIntegrity blockiert nach maximal vier Versuchen; Tests sind ein Umgebungs-Nicht-Ergebnis.'
+Write-Output "SAC/CodeIntegrity blockiert nach $MaxAttempts Versuch(en); Tests sind ein Umgebungs-Nicht-Ergebnis."
 exit 42

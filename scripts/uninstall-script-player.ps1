@@ -5,6 +5,11 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
+$defaultInstallDirectory = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Programs\ClipPlayer'))
+$InstallDirectory = [IO.Path]::GetFullPath($InstallDirectory)
+if (-not $InstallDirectory.Equals($defaultInstallDirectory, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "ClipPlayer uses the fixed per-user install directory: $defaultInstallDirectory"
+}
 
 $classesRoot = 'Registry::HKEY_CURRENT_USER\Software\Classes'
 $progId = 'ClipPlayer.Audio'
@@ -20,8 +25,7 @@ $shortcut = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\ClipPl
 Remove-Item -LiteralPath $shortcut -Force -ErrorAction SilentlyContinue
 if (Test-Path -LiteralPath $InstallDirectory) {
     $resolved = (Resolve-Path -LiteralPath $InstallDirectory).Path
-    $expectedParent = (Resolve-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'Programs')).Path
-    if ([IO.Path]::GetDirectoryName($resolved) -ne $expectedParent -or [IO.Path]::GetFileName($resolved) -ne 'ClipPlayer') {
+    if (-not $resolved.Equals($defaultInstallDirectory, [StringComparison]::OrdinalIgnoreCase)) {
         throw "Refusing to remove unexpected install directory: $resolved"
     }
     Remove-Item -LiteralPath $resolved -Recurse -Force

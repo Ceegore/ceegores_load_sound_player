@@ -5,6 +5,11 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
+$defaultInstallDirectory = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Programs\ClipPlayer'))
+$InstallDirectory = [IO.Path]::GetFullPath($InstallDirectory)
+if (-not $InstallDirectory.Equals($defaultInstallDirectory, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "ClipPlayer uses the fixed per-user install directory: $defaultInstallDirectory"
+}
 
 $source = Join-Path (Split-Path $PSScriptRoot -Parent) 'src\ClipPlayer.Script\ClipPlayer.ps1'
 $launcherSource = Join-Path (Split-Path $PSScriptRoot -Parent) 'src\ClipPlayer.Script\ClipPlayerLauncher.ps1'
