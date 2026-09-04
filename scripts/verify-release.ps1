@@ -49,23 +49,26 @@ function Invoke-TestSuite {
 }
 
 function Invoke-StaticScriptChecks {
-    $wrapperText = Get-Content (Join-Path $root 'scripts\run-tests-sac-safe.ps1') -Raw
-    $stressText = Get-Content (Join-Path $root 'scripts\run-audio-stress.ps1') -Raw
+    $wrapperText = [IO.File]::ReadAllText((Join-Path $root 'scripts\run-tests-sac-safe.ps1'))
+    $stressText = [IO.File]::ReadAllText((Join-Path $root 'scripts\run-audio-stress.ps1'))
     Assert-Condition ($wrapperText -match '\$null -eq \$exitCode') 'SAC-Wrapper muss null ExitCode als inconclusive behandeln.'
     Assert-Condition ($wrapperText -match 'exit 42') 'SAC-Wrapper benötigt den eindeutigen Exit 42.'
     Assert-Condition ($wrapperText -match '\[switch\]\$SkipBuild') 'SAC-Wrapper benötigt SkipBuild für einen einzelnen Build-Zyklus.'
     Assert-Condition ($stressText -match '\[Environment\]::ProcessorCount') 'Stress-Harness muss CPU-Anzahl berücksichtigen.'
     Assert-Condition ($stressText -match '\$CpuWorkerCap') 'Stress-Harness muss einen expliziten Worker-Cap besitzen.'
-    $packageReadme = Get-Content (Join-Path $root 'packaging\ClipPlayer.Package\README.md') -Raw
+    $packageReadme = [IO.File]::ReadAllText((Join-Path $root 'packaging\ClipPlayer.Package\README.md'))
     Assert-Condition ($packageReadme -notmatch '(?i)-ExecutionPolicy\s+Bypass') 'Dokumentation darf keinen ExecutionPolicy-Bypass empfehlen.'
-    $releaseDocs = Get-Content (Join-Path $root 'docs\release\performance-and-trust-gates.md') -Raw
+    $releaseDocs = [IO.File]::ReadAllText((Join-Path $root 'docs\release\performance-and-trust-gates.md'))
     Assert-Condition ($releaseDocs -match '(?i)Coverage ist ein separates Qualitäts-Gate') 'Coverage-Gate muss ausdrücklich getrennt dokumentiert sein.'
     Assert-Condition ($releaseDocs -match '(?i)behauptet keine Coverage') 'Release-Gate darf Coverage nicht als bestanden vortäuschen.'
-    $scriptStress = Get-Content (Join-Path $root 'scripts\test-script-player-e2e.ps1') -Raw
+    $scriptStress = [IO.File]::ReadAllText((Join-Path $root 'scripts\test-script-player-e2e.ps1'))
     Assert-Condition ($scriptStress -notmatch 'AppActivate|SendKeys|SetFocus|InvokePattern') 'Skriptplayer-Dauerlauf darf den globalen Eingabefokus nicht verwenden.'
 }
 
 Invoke-StaticScriptChecks
+Write-Output 'Release-Gate: folder mode sorting unit test'
+& powershell.exe -NoLogo -NoProfile -File (Join-Path $root 'scripts\test-folder-mode-unit.ps1')
+if ($LASTEXITCODE -ne 0) { throw "Folder-mode-Test fehlgeschlagen (Exit $LASTEXITCODE)." }
 Write-Output 'Release-Gate: source-only Skriptplayer-Selftest'
 & powershell.exe -NoLogo -NoProfile -STA -File (Join-Path $root 'src\ClipPlayer.Script\ClipPlayer.ps1') -SelfTest
 if ($LASTEXITCODE -ne 0) { throw "Skriptplayer-Selftest fehlgeschlagen (Exit $LASTEXITCODE)." }

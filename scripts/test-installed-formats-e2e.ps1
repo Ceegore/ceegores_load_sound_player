@@ -8,8 +8,10 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 $hostExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $launcher = Join-Path $InstallDirectory 'ClipPlayerLauncher.ps1'
+$folderModule = Join-Path $InstallDirectory 'ClipPlayer.FolderMode.ps1'
 if (-not $FfmpegPath) { $FfmpegPath = (Get-Command ffmpeg -ErrorAction Stop).Source }
 if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) { throw "Installed launcher missing: $launcher" }
+if (-not (Test-Path -LiteralPath $folderModule -PathType Leaf)) { throw "Installed folder module missing: $folderModule" }
 $fixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ('ClipPlayer-format-e2e-' + [Guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory -Path $fixtureRoot
 $diagnostics = Join-Path $fixtureRoot 'diagnostics.json'
@@ -55,10 +57,17 @@ try {
     $state = Wait-FormatState { param($value) $value.CurrentIndex -eq 0 -and
         $value.CurrentPath -like '*.wav' -and $value.PositionMilliseconds -gt 0 -and $value.DurationMilliseconds -gt 0 }
     $results = @([PSCustomObject]@{ Format = 'WAV'; DurationMilliseconds = $state.DurationMilliseconds })
+    [IO.File]::WriteAllText($commandPath, '1|FolderModeOn')
+    $null = Wait-FormatState { param($value) $value.LastAutomationCommandId -eq 1 -and
+        $value.FolderMode -and $value.FolderPath -eq $fixtureRoot -and $value.FolderAudioCount -eq 3 -and
+        $value.CachedPlayerCount -eq 3 }
+    [IO.File]::WriteAllText($commandPath, '2|FolderModeOff')
+    $null = Wait-FormatState { param($value) $value.LastAutomationCommandId -eq 2 -and -not $value.FolderMode }
     for ($index = 1; $index -le 2; $index++) {
-        [IO.File]::WriteAllText($commandPath, "$index|Next")
+        $commandId = $index + 2
+        [IO.File]::WriteAllText($commandPath, "$commandId|Next")
         $expectedName = $formats[$index]
-        $state = Wait-FormatState { param($value) $value.LastAutomationCommandId -eq $index -and
+        $state = Wait-FormatState { param($value) $value.LastAutomationCommandId -eq $commandId -and
             [IO.Path]::GetFileName($value.CurrentPath) -eq $expectedName -and
             $value.PositionMilliseconds -gt 0 -and $value.DurationMilliseconds -gt 0 }
         $results += [PSCustomObject]@{
@@ -67,7 +76,7 @@ try {
         }
     }
 
-    [IO.File]::WriteAllText($commandPath, '3|Close')
+    [IO.File]::WriteAllText($commandPath, '5|Close')
     $null = $playerProcess.WaitForExit(5000)
     if (-not $playerProcess.HasExited) { throw 'Installed player did not close gracefully.' }
     $stderrText = if (Test-Path $stderrPath) { Get-Content $stderrPath -Raw } else { '' }
@@ -77,7 +86,7 @@ try {
     } -ErrorAction SilentlyContinue | Where-Object { $_.Message -match 'ClipPlayer' })
     if ($events.Count -ne 0) { throw "Code Integrity logged $($events.Count) related block events." }
     $results | Format-Table -AutoSize
-    Write-Output 'Installed WAV/MP3/FLAC autoplay and switching: PASS'
+    Write-Output 'Installed folder mode plus WAV/MP3/FLAC autoplay and switching: PASS'
     Write-Output 'Code Integrity events: 0'
 }
 finally {

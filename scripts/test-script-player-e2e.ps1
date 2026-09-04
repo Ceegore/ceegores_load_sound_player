@@ -14,6 +14,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $playerSource = Join-Path (Split-Path $PSScriptRoot -Parent) 'src\ClipPlayer.Script\ClipPlayer.ps1'
+$folderModuleSource = Join-Path (Split-Path $PSScriptRoot -Parent) 'src\ClipPlayer.Script\ClipPlayer.FolderMode.ps1'
 $launcherSource = Join-Path (Split-Path $PSScriptRoot -Parent) 'src\ClipPlayer.Script\ClipPlayerLauncher.ps1'
 $hostExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('ClipPlayer-script-stress-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
@@ -114,16 +115,23 @@ function Send-BackgroundCommand {
 
 try {
     if (-not (Test-Path -LiteralPath $playerSource -PathType Leaf)) { throw "Player missing: $playerSource" }
+    if (-not (Test-Path -LiteralPath $folderModuleSource -PathType Leaf)) { throw "Folder module missing: $folderModuleSource" }
     if (-not (Test-Path -LiteralPath $launcherSource -PathType Leaf)) { throw "Launcher missing: $launcherSource" }
     if ((Get-AuthenticodeSignature -LiteralPath $hostExe).Status -ne 'Valid') { throw 'Windows PowerShell signature is invalid.' }
     $null = New-Item -ItemType Directory -Path $testRoot
     $playerScript = Join-Path $testRoot 'ClipPlayer.ps1'
+    $folderModule = Join-Path $testRoot 'ClipPlayer.FolderMode.ps1'
     $launcherScript = Join-Path $testRoot 'ClipPlayerLauncher.ps1'
     Copy-Item -LiteralPath $playerSource -Destination $playerScript
+    Copy-Item -LiteralPath $folderModuleSource -Destination $folderModule
     Copy-Item -LiteralPath $launcherSource -Destination $launcherScript
     1..3 | ForEach-Object { New-SilentWave (Join-Path $testRoot ("clip-$_.wav")) }
     [IO.File]::WriteAllText((Join-Path $testRoot 'clip-4.wav'), 'not audio')
     New-SilentWave (Join-Path $testRoot 'clip-5.wav') 1
+    [IO.File]::WriteAllText((Join-Path $testRoot 'ignored.txt'), 'not listed')
+    $nestedRoot = Join-Path $testRoot 'folder-a'
+    $null = New-Item -ItemType Directory -Path $nestedRoot
+    New-SilentWave (Join-Path $nestedRoot 'nested.wav')
 
     $workerCommand = '$end=[DateTime]::UtcNow.AddSeconds(' + ($DurationSeconds + 30) + ');' +
         'while([DateTime]::UtcNow -lt $end){for($i=1;$i -lt 200000;$i++){$null=[Math]::Sqrt($i)}}'
@@ -156,6 +164,40 @@ try {
 
     $initial = Wait-State { param($state) $state.PositionMilliseconds -gt 0 -and $state.DurationMilliseconds -gt 0 } 10000 'autoplay'
     if ($initial.CachedPlayerCount -ne 4) { throw "Expected four preloaded players, got $($initial.CachedPlayerCount)." }
+    $folderOn = Send-BackgroundCommand 'FolderModeOn'
+    $null = Wait-State { param($state) $state.LastAutomationCommandId -eq $folderOn -and $state.FolderMode -and
+        $state.FolderPath -eq $testRoot -and $state.FolderItemCount -eq 6 -and $state.FolderAudioCount -eq 5 -and
+        $state.FolderSelectedPath -eq (Join-Path $testRoot 'clip-1.wav') } 5000 'folder mode activation'
+    $folderOpen = Send-BackgroundCommand 'FolderOpenFirstFolder'
+    $null = Wait-State { param($state) $state.LastAutomationCommandId -eq $folderOpen -and
+        $state.FolderPath -eq $nestedRoot -and $state.FolderItemCount -eq 1 -and $state.FolderAudioCount -eq 1 } 5000 'folder navigation'
+    $folderUp = Send-BackgroundCommand 'FolderUp'
+    $null = Wait-State { param($state) $state.LastAutomationCommandId -eq $folderUp -and $state.FolderPath -eq $testRoot } 5000 'parent navigation'
+    $positionBeforeSort = (Read-State).PositionMilliseconds
+    $sortDescending = Send-BackgroundCommand 'FolderSortNameDescending'
+    $null = Wait-State { param($state) $state.LastAutomationCommandId -eq $sortDescending -and
+        $state.FolderDescending -and $state.FolderItemNames[0] -eq 'folder-a' -and
+        $state.FolderItemNames[1] -eq 'clip-5.wav' -and $state.CurrentIndex -eq 4 -and
+        $state.PositionMilliseconds -ge $positionBeforeSort } 5000 'descending folder sort without playback restart'
+    foreach ($sortCase in @(
+        [PSCustomObject]@{ Command = 'FolderSortDateCreated'; Expected = 'Date created' }
+        [PSCustomObject]@{ Command = 'FolderSortDateModified'; Expected = 'Date modified' }
+        [PSCustomObject]@{ Command = 'FolderSortType'; Expected = 'Type' }
+        [PSCustomObject]@{ Command = 'FolderSortSize'; Expected = 'Size' })) {
+        $sortCommand = Send-BackgroundCommand $sortCase.Command
+        $expectedSort = $sortCase.Expected
+        $null = Wait-State { param($state) $state.LastAutomationCommandId -eq $sortCommand -and
+            $state.FolderSort -eq $expectedSort -and -not $state.FolderDescending } 5000 "$expectedSort folder sort"
+    }
+    $sortAscending = Send-BackgroundCommand 'FolderSortNameAscending'
+    $null = Wait-State { param($state) $state.LastAutomationCommandId -eq $sortAscending -and
+        -not $state.FolderDescending -and $state.FolderItemNames[1] -eq 'clip-1.wav' } 5000 'ascending folder sort'
+    $folderPlay = Send-BackgroundCommand 'FolderPlayFirstAudio'
+    $null = Wait-State { param($state) $state.LastAutomationCommandId -eq $folderPlay -and
+        $state.CurrentPath -eq (Join-Path $testRoot 'clip-1.wav') -and -not $state.IsPaused -and
+        $state.PositionMilliseconds -gt 0 -and $state.CachedPlayerCount -eq 4 } 5000 'folder autoplay and preload'
+    $folderOff = Send-BackgroundCommand 'FolderModeOff'
+    $null = Wait-State { param($state) $state.LastAutomationCommandId -eq $folderOff -and -not $state.FolderMode } 5000 'folder mode deactivation'
     $pauseCommand = Send-BackgroundCommand 'TogglePause'
     $paused = Wait-State { param($state) $state.LastAutomationCommandId -eq $pauseCommand -and $state.IsPaused } 5000 'initial pause'
     Start-Sleep -Milliseconds 500
@@ -182,20 +224,28 @@ try {
         $resetCommand = Send-BackgroundCommand 'Previous'
         $null = Wait-State { param($state) $state.LastAutomationCommandId -eq $resetCommand -and $state.CurrentIndex -eq $targetIndex } 5000 'end-of-list reset'
     }
-    $nonIntrusiveCommandChecks = 13
+    $nonIntrusiveCommandChecks = 24
 
     $deletePassed = $null
     $maximumIndex = 2
     if ($ExerciseDelete) {
         $stateBeforeDelete = Read-State
         $pathBeforeDelete = [string]$stateBeforeDelete.CurrentPath
-        $deleteCommand = Send-BackgroundCommand 'DeleteConfirmedTestFixture'
+        $folderDeleteMode = Send-BackgroundCommand 'FolderModeOn'
+        $null = Wait-State { param($state) $state.LastAutomationCommandId -eq $folderDeleteMode -and
+            $state.FolderMode -and $state.FolderSelectedPath -eq $pathBeforeDelete } 5000 'folder delete setup'
+        $deleteCommand = Send-BackgroundCommand 'FolderDeleteSelectedTestFixture'
         $deleteWatch = [Diagnostics.Stopwatch]::StartNew()
         do {
             $deletePassed = -not (Test-Path -LiteralPath $pathBeforeDelete)
             if (-not $deletePassed) { Start-Sleep -Milliseconds 100 }
         } while (-not $deletePassed -and $deleteWatch.ElapsedMilliseconds -lt 5000)
         if (-not $deletePassed) { throw 'Delete did not move the selected fixture out of its source folder.' }
+        $null = Wait-State { param($state) $state.LastAutomationCommandId -eq $deleteCommand -and
+            $state.FolderMode -and $state.FolderAudioCount -eq 4 } 5000 'folder delete refresh'
+        $folderDeleteOff = Send-BackgroundCommand 'FolderModeOff'
+        $null = Wait-State { param($state) $state.LastAutomationCommandId -eq $folderDeleteOff -and
+            -not $state.FolderMode } 5000 'folder delete teardown'
         $maximumIndex = 1
     }
 
@@ -277,7 +327,13 @@ try {
     }
     if (-not $KeepFixture -and (Test-Path -LiteralPath $testRoot)) {
         Get-ChildItem -LiteralPath $testRoot -File | Where-Object {
-            $_.Name -like 'clip-*.wav' -or $_.Name -in @('ClipPlayer.ps1', 'ClipPlayerLauncher.ps1', 'command.txt')
+            $_.Name -like 'clip-*.wav' -or $_.Name -in @(
+                'ClipPlayer.ps1', 'ClipPlayer.FolderMode.ps1', 'ClipPlayerLauncher.ps1', 'command.txt', 'ignored.txt')
         } | Remove-Item -Force -ErrorAction SilentlyContinue
+        $nestedFixture = [IO.Path]::GetFullPath((Join-Path $testRoot 'folder-a'))
+        if ([IO.Path]::GetDirectoryName($nestedFixture) -eq [IO.Path]::GetFullPath($testRoot) -and
+            (Test-Path -LiteralPath $nestedFixture -PathType Container)) {
+            Remove-Item -LiteralPath $nestedFixture -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 }

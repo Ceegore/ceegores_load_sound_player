@@ -15,6 +15,13 @@ Es werden keine Sicherheitsrichtlinien veraendert und kein `ExecutionPolicy Bypa
 verwendet. Pfeil links/rechts wechselt mit Autoplay, Space pausiert oder setzt fort,
 Delete verschiebt nach Rueckfrage in den Papierkorb.
 
+Der Schalter `Folder mode` blendet eine Explorer-aehnliche Detailansicht ein. Sie zeigt
+nur Ordner sowie WAV-, MP3- und FLAC-Dateien, kann ueber `This PC`, `Up` und die
+Adresszeile navigieren und nach Name, Erstellungs-/Aenderungsdatum, Typ oder Groesse
+auf- und absteigend sortieren. Ein Doppelklick oder Enter startet eine Datei; die
+sichtbare Sortierung wird dabei zur Wiedergabereihenfolge und die naechsten drei
+Sounds werden wie in der normalen Ansicht vorgeladen.
+
 ## Fuer den aktuellen Benutzer installieren
 
 ```powershell
@@ -39,7 +46,8 @@ Rueckgaengig machen:
 ```
 
 Der Test bedient das reale Fenster, erzeugt nur stumme temporaere WAVs, prueft auch
-defekte Medien und Neustart am Listenende, misst Wechsellatenzen gegen feste Budgets
+Ordnernavigation, alle Sortierfelder, Preloading, Loeschen, defekte Medien und Neustart
+am Listenende und misst Wechsellatenzen gegen feste Budgets
 und prueft das Code-Integrity-Protokoll. `-CpuWorkers 0` erzeugt keine zusaetzliche
 Last; fuer einen dedizierten Lastrechner kann ein kleiner positiver Wert gesetzt werden.
 Das Fenster wird dabei

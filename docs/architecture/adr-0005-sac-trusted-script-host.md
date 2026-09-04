@@ -29,7 +29,9 @@ Store-Signatur steht nicht zur Verfuegung.
 
 - WAV, MP3 und FLAC ueber vorhandene Windows-Codecs.
 - Autoplay, Pause/Resume, Vor/Zurueck, Papierkorb und Lautstaerke.
-- Pfeil links/rechts und Leertaste funktionieren unabhaengig vom fokussierten Steuerelement.
+- Explorer-aehnliche Ordnernavigation zeigt ausschliesslich Ordner und unterstuetzte Audiodateien.
+- Ordnersortierung nach Name, Erstellung, Aenderung, Typ und Groesse bestimmt die Wiedergabereihenfolge.
+- Pfeil links/rechts und Leertaste funktionieren global, ausser beim Bearbeiten der Ordner-Adress-/Sortierleiste.
 - Aktueller, vorheriger und bis zu drei folgende Titel bleiben als MediaPlayer geoeffnet.
 - Windows-Integration erfolgt benutzerbezogen und setzt nie ungefragt den Standard.
 
@@ -47,7 +49,9 @@ Explorer / Startmenue
         |
 Microsoft-signiertes powershell.exe
         |
-ClipPlayer.ps1 -- XAML + Zustandssteuerung
+ClipPlayer.ps1 -- XAML + Wiedergabesteuerung
+        |
+ClipPlayer.FolderMode.ps1 -- Navigation + Sortierung
         |
 Windows WPF MediaPlayer / Media Foundation / Audio Endpoint
 ```
@@ -55,6 +59,7 @@ Windows WPF MediaPlayer / Media Foundation / Audio Endpoint
 ### Key Interfaces
 
 - `ClipPlayer.ps1 [-AudioPath <file>]`: Start und optionales Autoplay.
+- `ClipPlayer.FolderMode.ps1`: quelloffene Ordneransicht ohne zusaetzliche Binaerabhaengigkeit.
 - `ClipPlayerLauncher.ps1`: hebt die Hostprioritaet vor dem Parsen des Hauptskripts an.
 - `install-script-player.ps1`: Kopie nach LocalAppData, Open-With, Kontextmenue und Startmenue.
 - `test-script-player-e2e.ps1`: UI-Automation, Last, Latenz und Code-Integrity-Gate.
@@ -110,7 +115,9 @@ Windows WPF MediaPlayer / Media Foundation / Audio Endpoint
 - **CPU**: GUI-Timer 200 ms; eigener Prozess wird auf AboveNormal gesetzt.
 - **Memory**: maximal vorheriger, aktueller und drei folgende MediaPlayer.
 - **Load Time**: XAML- und PowerShell-Kaltstart; Autoplay wird erst in `MediaOpened` ausgeloest.
-- **Network**: keine Netzwerkzugriffe.
+- **Network**: keine app-eigenen Netzwerkzugriffe; explizit eingegebene UNC-Pfade werden wie lokale Ordner gelesen.
+- **Folder mode**: Verzeichnis-Metadaten werden erst beim Oeffnen des Ordners gelesen;
+  MediaPlayer-Wiedergabe und das Cachefenster bleiben dabei bestehen.
 
 ## Migration Plan
 
@@ -125,6 +132,8 @@ Windows WPF MediaPlayer / Media Foundation / Audio Endpoint
 - Medienposition steigt nach Argumentstart ohne weitere Eingabe.
 - Space friert Position ein und setzt sie fort.
 - Pfeile wechseln mit Autoplay; Preload-Fenster umfasst bis zu vier Folgetitelkontexte.
+- Ordneransicht filtert Fremdformate, navigiert Unterordner und uebernimmt jede Sortierung
+  ohne den laufenden Titel neu zu starten.
 - Papierkorbtest entfernt nur die generierte Testdatei.
 - 15-Minuten-Lauf unter CPU-Last ohne Exit oder Wiedergabefehler.
 - Ein Langlauf verwendet weder `AppActivate`, `SendKeys`, `SetFocus` noch UI-Klicks.
