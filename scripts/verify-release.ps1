@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [ValidateSet('Core', 'Audio', 'App')]
     [string[]]$TestSuites = @('Core', 'Audio', 'App'),

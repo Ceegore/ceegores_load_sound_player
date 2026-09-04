@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string] $InstallDirectory = (Join-Path $env:LOCALAPPDATA 'Programs\ClipPlayer')
 )

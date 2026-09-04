@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param([int]$Maximum = 500)
 
 $ErrorActionPreference = 'Stop'

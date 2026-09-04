@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$Solution = 'ClipPlayer.sln',
     [string]$CanaryProject = 'tests/ClipPlayer.Core.Tests/ClipPlayer.Core.Tests.csproj',

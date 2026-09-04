@@ -1,5 +1,5 @@
-using NAudio.Wave;
 using ClipPlayer.Audio.Windows;
+using NAudio.Wave;
 
 namespace ClipPlayer.Audio.Windows.Tests;
 
