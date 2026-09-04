@@ -19,20 +19,32 @@ function Assert-Condition {
     if (-not $Condition) { throw "SBOM-Gate: $Message" }
 }
 
+function Get-Sha256Hex {
+    param([string]$Path)
+    $stream = [IO.File]::OpenRead($Path)
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    try {
+        return ([BitConverter]::ToString($hasher.ComputeHash($stream))).Replace('-', '').ToLowerInvariant()
+    } finally {
+        $hasher.Dispose()
+        $stream.Dispose()
+    }
+}
+
 function Get-VerifiedTool {
     param([string]$RequestedPath)
     if ($RequestedPath) {
         $resolved = (Resolve-Path -LiteralPath $RequestedPath).Path
-        Assert-Condition ((Get-FileHash -LiteralPath $resolved -Algorithm SHA256).Hash -eq $toolSha256) "sbom-tool SHA-256 stimmt nicht mit v$toolVersion überein."
+        Assert-Condition ((Get-Sha256Hex $resolved) -eq $toolSha256) "sbom-tool SHA-256 stimmt nicht mit v$toolVersion überein."
         return $resolved
     }
     $cache = Join-Path ([IO.Path]::GetTempPath()) "ClipPlayer\sbom-tool-v$toolVersion"
     $download = Join-Path $cache 'sbom-tool-win-x64.exe'
     $null = New-Item -ItemType Directory -Path $cache -Force
-    if (-not (Test-Path -LiteralPath $download) -or (Get-FileHash -LiteralPath $download -Algorithm SHA256).Hash -ne $toolSha256) {
+    if (-not (Test-Path -LiteralPath $download) -or (Get-Sha256Hex $download) -ne $toolSha256) {
         Invoke-WebRequest -Uri $toolUrl -OutFile $download -UseBasicParsing
     }
-    Assert-Condition ((Get-FileHash -LiteralPath $download -Algorithm SHA256).Hash -eq $toolSha256) "Download-Hash für sbom-tool v$toolVersion ist falsch."
+    Assert-Condition ((Get-Sha256Hex $download) -eq $toolSha256) "Download-Hash für sbom-tool v$toolVersion ist falsch."
     return $download
 }
 
