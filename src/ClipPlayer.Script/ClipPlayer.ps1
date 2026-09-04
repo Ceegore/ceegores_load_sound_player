@@ -82,6 +82,15 @@ function Convert-TimeText {
     return $Value.ToString('m\:ss')
 }
 
+function Get-NaturalSortKey {
+    param([string] $Path)
+    return [regex]::Replace([IO.Path]::GetFileName($Path), '\d+', {
+        param($match)
+        $digits = $match.Value.TrimStart('0'); if ($digits.Length -eq 0) { $digits = '0' }
+        return ('{0:D8}:{1}' -f $digits.Length, $digits)
+    })
+}
+
 function New-WindowFromXaml {
     $reader = New-Object System.Xml.XmlNodeReader ([xml]$xaml)
     try { return [Windows.Markup.XamlReader]::Load($reader) }
@@ -100,6 +109,8 @@ if ($SelfTest) {
     if ($supportedExtensions.Count -ne 3 -or -not (Test-SupportedPath 'probe.wav')) {
         throw 'Supported file rules are invalid.'
     }
+    $names = @('clip10.wav', 'clip2.wav', 'clip1.wav' | Sort-Object { Get-NaturalSortKey $_ })
+    if (($names -join ',') -ne 'clip1.wav,clip2.wav,clip10.wav') { throw 'Natural file ordering is invalid.' }
     $probeWindow.Close()
     Write-Output 'SELFTEST PASS: trusted-host XAML and file rules are valid.'
     return
@@ -120,10 +131,10 @@ $script:statusText = $window.FindName('StatusText')
 $script:playlist = @()
 $script:currentIndex = -1
 $script:players = @{}
+$script:playerFailures = @{}
 $script:isPaused = $false
 $script:internalSelection = $false
 $script:seeking = $false
-$script:closed = $false
 $script:diagnosticTick = 0
 $script:lastAutomationCommandId = 0
 $script:lastAutomationCommandDurationMilliseconds = 0
@@ -149,6 +160,7 @@ function Publish-Diagnostics {
             } else { 0 }
             CachedPlayerCount = $script:players.Count
             CachedPaths = @($script:players.Keys)
+            Status = $script:statusText.Text
             LastAutomationCommandId = $script:lastAutomationCommandId
             LastAutomationCommandDurationMilliseconds = $script:lastAutomationCommandDurationMilliseconds
             TimestampUtc = [DateTime]::UtcNow.ToString('o')
@@ -174,7 +186,37 @@ function Close-Player {
     param([string] $Path)
     if ($script:players.ContainsKey($Path)) {
         try { $script:players[$Path].Close() } catch { }
-        $script:players.Remove($Path)
+        $null = $script:players.Remove($Path)
+    }
+    $null = $script:playerFailures.Remove($Path)
+}
+
+function Invoke-MediaEvent {
+    param([string] $Kind, [string] $Path, $Player, $EventArgs)
+    if (-not $script:players.ContainsKey($Path) -or
+        -not ([object]::ReferenceEquals($script:players[$Path], $Player))) { return }
+    $isCurrent = $script:currentIndex -ge 0 -and $script:playlist[$script:currentIndex] -eq $Path
+    switch ($Kind) {
+        'Failed' {
+            $message = if ($null -ne $EventArgs.ErrorException) { $EventArgs.ErrorException.Message }
+                else { 'Audio could not be opened.' }
+            $script:playerFailures[$Path] = $message
+            if ($isCurrent) { $script:isPaused = $true; Set-Status ("Playback error: " + $message); Publish-Diagnostics }
+        }
+        'Opened' {
+            $null = $script:playerFailures.Remove($Path)
+            if ($isCurrent -and -not $script:isPaused) {
+                $Player.Play(); Set-Status ([IO.Path]::GetFileName($Path)); Publish-Diagnostics
+            }
+        }
+        'Ended' {
+            if (-not $isCurrent) { return }
+            if ($script:currentIndex -lt ($script:playlist.Count - 1)) { Select-Track ($script:currentIndex + 1) }
+            else {
+                $Player.Position = [TimeSpan]::Zero; $script:isPaused = $true
+                Set-Status ("Finished: " + [IO.Path]::GetFileName($Path)); Publish-Diagnostics
+            }
+        }
     }
 }
 
@@ -185,32 +227,13 @@ function Get-Player {
     $player = New-Object System.Windows.Media.MediaPlayer
     $player.Volume = [double]$script:volumeSlider.Value
     $eventPath = $Path
-    $player.add_MediaFailed(({
-        param($sender, $eventArgs)
-        if ($script:currentIndex -ge 0 -and $script:playlist[$script:currentIndex] -eq $eventPath) {
-            Set-Status ("Playback error: " + $eventArgs.ErrorException.Message)
-        }
-    }).GetNewClosure())
     $eventPlayer = $player
-    $player.add_MediaOpened(({
-        if ($script:currentIndex -ge 0 -and $script:playlist[$script:currentIndex] -eq $eventPath -and
-            -not $script:isPaused) {
-            $eventPlayer.Play()
-            Publish-Diagnostics
-        }
-    }).GetNewClosure())
-    $player.add_MediaEnded(({
-        if ($script:currentIndex -ge 0 -and $script:playlist[$script:currentIndex] -eq $eventPath) {
-            if ($script:currentIndex -lt ($script:playlist.Count - 1)) {
-                Select-Track ($script:currentIndex + 1)
-            } else {
-                $script:isPaused = $true
-                Set-Status ("Finished: " + [IO.Path]::GetFileName($eventPath))
-            }
-        }
-    }).GetNewClosure())
-    $player.Open((New-Object Uri($Path, [UriKind]::Absolute)))
+    $eventCallback = ${function:Invoke-MediaEvent}
+    $player.add_MediaFailed(({ param($sender, $failureArgs); & $eventCallback 'Failed' $eventPath $eventPlayer $failureArgs }).GetNewClosure())
+    $player.add_MediaOpened(({ & $eventCallback 'Opened' $eventPath $eventPlayer $null }).GetNewClosure())
+    $player.add_MediaEnded(({ & $eventCallback 'Ended' $eventPath $eventPlayer $null }).GetNewClosure())
     $script:players[$Path] = $player
+    $player.Open((New-Object Uri($Path, [UriKind]::Absolute)))
     return $player
 }
 
@@ -251,11 +274,13 @@ function Select-Track {
     Set-PreloadWindow
 
     $path = $script:playlist[$Index]
+    Set-Status ("Opening: " + [IO.Path]::GetFileName($path))
+    if ($script:playerFailures.ContainsKey($path)) { Close-Player $path }
     $player = Get-Player $path
     $player.Volume = [double]$script:volumeSlider.Value
     $player.Position = [TimeSpan]::Zero
     $player.Play()
-    Set-Status ([IO.Path]::GetFileName($path))
+    if ($player.NaturalDuration.HasTimeSpan) { Set-Status ([IO.Path]::GetFileName($path)) }
     Update-Controls
     Publish-Diagnostics
 }
@@ -264,7 +289,8 @@ function Set-Playlist {
     param([string[]] $Paths, [int] $SelectedIndex = 0)
     foreach ($cachedPath in @($script:players.Keys)) { Close-Player $cachedPath }
     $script:playlist = @($Paths | Where-Object { (Test-Path -LiteralPath $_ -PathType Leaf) -and (Test-SupportedPath $_) } |
-        ForEach-Object { [IO.Path]::GetFullPath($_) } | Sort-Object)
+        ForEach-Object { [IO.Path]::GetFullPath($_) } |
+        Sort-Object @{ Expression = { Get-NaturalSortKey $_ } }, @{ Expression = { $_ } })
     $script:playlistControl.Items.Clear()
     foreach ($path in $script:playlist) { $null = $script:playlistControl.Items.Add([IO.Path]::GetFileName($path)) }
     if ($script:playlist.Count -eq 0) {
@@ -287,11 +313,17 @@ function Open-AudioFiles {
 function Toggle-Pause {
     if ($script:currentIndex -lt 0) { return }
     $path = $script:playlist[$script:currentIndex]
+    if ($script:playerFailures.ContainsKey($path)) { Close-Player $path }
     $player = Get-Player $path
     if ($script:isPaused) {
+        if ($player.NaturalDuration.HasTimeSpan -and
+            $player.Position -ge ($player.NaturalDuration.TimeSpan - [TimeSpan]::FromMilliseconds(50))) {
+            $player.Position = [TimeSpan]::Zero
+        }
         $player.Play()
         $script:isPaused = $false
-        Set-Status ([IO.Path]::GetFileName($path))
+        Set-Status $(if ($player.NaturalDuration.HasTimeSpan) { [IO.Path]::GetFileName($path) }
+            else { "Opening: " + [IO.Path]::GetFileName($path) })
     } else {
         $player.Pause()
         $script:isPaused = $true
@@ -326,12 +358,14 @@ function Remove-CurrentTrack {
             $path,
             [Microsoft.VisualBasic.FileIO.UIOption]::OnlyErrorDialogs,
             [Microsoft.VisualBasic.FileIO.RecycleOption]::SendToRecycleBin)
-        $remaining = @($script:playlist | Where-Object { $_ -ne $path })
-        if ($remaining.Count -eq 0) { Set-Playlist @(); return }
-        Set-Playlist $remaining ([Math]::Min($script:currentIndex, $remaining.Count - 1))
     } catch {
+        Select-Track $script:currentIndex
         Set-Status ("Delete failed: " + $_.Exception.Message)
+        return
     }
+    $remaining = @($script:playlist | Where-Object { $_ -ne $path })
+    if ($remaining.Count -eq 0) { Set-Playlist @(); return }
+    Set-Playlist $remaining ([Math]::Min($script:currentIndex, $remaining.Count - 1))
 }
 
 function Invoke-PlayerCommand {
@@ -342,6 +376,7 @@ function Invoke-PlayerCommand {
         'TogglePause' { Toggle-Pause }
         'Delete' { Remove-CurrentTrack }
         'DeleteConfirmedTestFixture' { Remove-CurrentTrack -SkipConfirmation }
+        'Close' { $script:window.Close() }
         default { throw "Unknown player command: $Command" }
     }
 }
@@ -361,7 +396,8 @@ function Read-AutomationCommand {
         $script:lastAutomationCommandDurationMilliseconds = $commandWatch.Elapsed.TotalMilliseconds
         $script:lastAutomationCommandId = $commandId
         Publish-Diagnostics
-    } catch {
+    } catch [IO.IOException] { return }
+    catch {
         Set-Status ("Automation error: " + $_.Exception.Message)
     }
 }
@@ -390,8 +426,7 @@ $script:window.Add_PreviewKeyDown({
         ([Windows.Input.Key]::Delete) { Invoke-PlayerCommand 'Delete'; $eventArgs.Handled = $true }
     }
 })
-$script:positionSlider.Add_PreviewMouseDown({ $script:seeking = $true })
-$script:positionSlider.Add_PreviewMouseUp({
+function Complete-Seek {
     if ($script:currentIndex -ge 0) {
         $path = $script:playlist[$script:currentIndex]
         $player = Get-Player $path
@@ -401,7 +436,10 @@ $script:positionSlider.Add_PreviewMouseUp({
         }
     }
     $script:seeking = $false
-})
+}
+$script:positionSlider.Add_PreviewMouseDown({ $script:seeking = $true })
+$script:positionSlider.Add_PreviewMouseUp({ Complete-Seek })
+$script:positionSlider.Add_LostMouseCapture({ if ($script:seeking) { Complete-Seek } })
 
 $timer = New-Object Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds($(if ($BackgroundTest) { 50 } else { 200 }))
@@ -429,7 +467,6 @@ $timer.Add_Tick({
     }
 })
 $script:window.Add_Closed({
-    $script:closed = $true
     $timer.Stop()
     foreach ($cachedPath in @($script:players.Keys)) { Close-Player $cachedPath }
     Publish-Diagnostics
@@ -445,8 +482,12 @@ if (Test-SupportedPath $AudioPath -and (Test-Path -LiteralPath $AudioPath -PathT
     $fullPath = [IO.Path]::GetFullPath($AudioPath)
     $folder = [IO.Path]::GetDirectoryName($fullPath)
     $files = @(Get-ChildItem -LiteralPath $folder -File | Where-Object { Test-SupportedPath $_.FullName } |
-        Sort-Object Name | ForEach-Object { $_.FullName })
-    $selected = [Array]::IndexOf($files, $fullPath)
+        Sort-Object @{ Expression = { Get-NaturalSortKey $_.FullName } }, FullName |
+        ForEach-Object { $_.FullName })
+    $selected = -1
+    for ($index = 0; $index -lt $files.Count; $index++) {
+        if ([string]::Equals($files[$index], $fullPath, [StringComparison]::OrdinalIgnoreCase)) { $selected = $index; break }
+    }
     Set-Playlist $files ([Math]::Max(0, $selected))
 }
 

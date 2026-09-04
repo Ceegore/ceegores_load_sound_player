@@ -3,8 +3,8 @@ using System.ComponentModel;
 using System.Globalization;
 using System.IO;
 using System.Runtime.CompilerServices;
-using System.Windows.Input;
 using System.Windows;
+using System.Windows.Input;
 using ClipPlayer.Core;
 
 namespace ClipPlayer.App;
@@ -25,6 +25,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IAsyncDisposable
     private double _volume = 1;
     private TimeSpan _position;
     private TimeSpan _duration;
+    private bool _disposed;
 
     public MainViewModel(IPlaybackPort player, IFilePicker? picker = null, IRecycleBin? recycleBin = null, IConfirmation? confirmation = null)
     {
@@ -33,10 +34,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IAsyncDisposable
         _recycleBin = recycleBin ?? new WindowsRecycleBin();
         _confirmation = confirmation ?? new MessageBoxConfirmation();
         OpenCommand = new AsyncCommand(OpenAsync);
-        PreviousCommand = new AsyncCommand(() => SelectRelativeAsync(-1), () => SelectedIndex > 0);
-        NextCommand = new AsyncCommand(() => SelectRelativeAsync(1), () => SelectedIndex >= 0 && SelectedIndex < Items.Count - 1);
-        TogglePauseCommand = new AsyncCommand(TogglePauseAsync);
-        DeleteCommand = new AsyncCommand(DeleteAsync);
+        PreviousCommand = new AsyncCommand(() => SelectRelativeAsync(-1), () => SelectedIndex > 0, queueWhileRunning: true);
+        NextCommand = new AsyncCommand(() => SelectRelativeAsync(1), () => SelectedIndex >= 0 && SelectedIndex < Items.Count - 1, queueWhileRunning: true);
+        TogglePauseCommand = new AsyncCommand(TogglePauseAsync, () => SelectedItem is not null && !IsBusy);
+        DeleteCommand = new AsyncCommand(DeleteAsync, () => SelectedItem is not null && !IsBusy);
         _player.Volume = _volume;
         if (_player is IPlaybackStateSource stateSource)
             stateSource.PlaybackChanged += OnPlaybackChanged;
@@ -69,19 +70,32 @@ public sealed class MainViewModel : INotifyPropertyChanged, IAsyncDisposable
             var argument = args.FirstOrDefault(x => AudioFileRules.IsSupported(x) && File.Exists(x));
             if (argument is null) return;
             var files = AudioFileDiscovery.ScanFolder(argument);
-            await SetItemsAsync(files, Array.IndexOf(files.ToArray(), Path.GetFullPath(argument))).ConfigureAwait(true);
+            var normalized = Path.GetFullPath(argument);
+            var index = files.ToList().FindIndex(path => string.Equals(path, normalized, StringComparison.OrdinalIgnoreCase));
+            await SetItemsAsync(files, index).ConfigureAwait(true);
         }
         catch (Exception ex) { Status = $"Dateien konnten nicht geladen werden: {ex.Message}"; }
     }
 
     public async Task SetItemsAsync(IEnumerable<string> paths, int selectedIndex = 0)
     {
+        Interlocked.Increment(ref _selectionGeneration);
+        _selectionCancellation.Cancel();
         var valid = paths.Where(AudioFileRules.IsSupported).Where(File.Exists).Select(x => new ClipItem(x)).ToArray();
         Items.Clear();
         foreach (var item in valid) Items.Add(item);
         OnPropertyChanged(nameof(CanSeek));
         RefreshNavigationCommands();
-        if (Items.Count == 0) { SelectedIndex = -1; Status = "Keine unterstützten Dateien"; return; }
+        if (Items.Count == 0)
+        {
+            SelectedIndex = -1;
+            if (_player is IPlaylistPlaybackPort emptyPlaylist)
+                await emptyPlaylist.SetPlaylistAsync([], -1, CancellationToken.None).ConfigureAwait(true);
+            else
+                await _player.StopAsync(CancellationToken.None).ConfigureAwait(true);
+            Status = "Keine unterstützten Dateien";
+            return;
+        }
         var targetIndex = Math.Clamp(selectedIndex, 0, Items.Count - 1);
         if (_player is IPlaylistPlaybackPort playlist)
         {
@@ -127,6 +141,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IAsyncDisposable
 
     private async Task SelectAsync(int index)
     {
+        if (_disposed) return;
         var generation = Interlocked.Increment(ref _selectionGeneration);
         _selectionCancellation.Cancel();
         _selectionCancellation.Dispose();
@@ -135,6 +150,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IAsyncDisposable
         await _selectionGate.WaitAsync().ConfigureAwait(true);
         try
         {
+            if (_disposed || generation != _selectionGeneration || token.IsCancellationRequested) return;
             SelectedIndex = index;
             var item = SelectedItem!;
             IsBusy = true;
@@ -211,7 +227,15 @@ public sealed class MainViewModel : INotifyPropertyChanged, IAsyncDisposable
             }
             await SelectAsync(targetIndex).ConfigureAwait(true);
         }
-        catch (Exception ex) { Status = $"Löschen fehlgeschlagen: {ex.Message}"; }
+        catch (Exception ex)
+        {
+            if (File.Exists(item.Path))
+            {
+                try { await _player.PlayAsync(item.Path, CancellationToken.None).ConfigureAwait(true); }
+                catch { /* Keep the deletion error as the actionable status. */ }
+            }
+            Status = $"Löschen fehlgeschlagen: {ex.Message}";
+        }
     }
 
     public void RefreshPosition()
@@ -226,12 +250,20 @@ public sealed class MainViewModel : INotifyPropertyChanged, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        if (_disposed) return;
+        _disposed = true;
+        Interlocked.Increment(ref _selectionGeneration);
         _selectionCancellation.Cancel();
         if (_player is IPlaybackStateSource stateSource)
             stateSource.PlaybackChanged -= OnPlaybackChanged;
-        await _player.DisposeAsync().ConfigureAwait(false);
-        _selectionGate.Dispose();
-        _selectionCancellation.Dispose();
+        await _selectionGate.WaitAsync().ConfigureAwait(false);
+        try { await _player.DisposeAsync().ConfigureAwait(false); }
+        finally
+        {
+            _selectionGate.Release();
+            _selectionGate.Dispose();
+            _selectionCancellation.Dispose();
+        }
     }
 
     private void OnPlaybackChanged(object? sender, PlaybackSnapshot snapshot)
@@ -270,10 +302,12 @@ public sealed class MainViewModel : INotifyPropertyChanged, IAsyncDisposable
     {
         (PreviousCommand as AsyncCommand)?.RaiseCanExecuteChanged();
         (NextCommand as AsyncCommand)?.RaiseCanExecuteChanged();
+        (TogglePauseCommand as AsyncCommand)?.RaiseCanExecuteChanged();
+        (DeleteCommand as AsyncCommand)?.RaiseCanExecuteChanged();
     }
 }
 
-public sealed class AsyncCommand(Func<Task> action, Func<bool>? canExecute = null) : ICommand
+public sealed class AsyncCommand(Func<Task> action, Func<bool>? canExecute = null, bool queueWhileRunning = false) : ICommand
 {
     private readonly Func<bool> _canExecute = canExecute ?? (() => true);
     private readonly object _gate = new();
@@ -286,9 +320,13 @@ public sealed class AsyncCommand(Func<Task> action, Func<bool>? canExecute = nul
     {
         lock (_gate)
         {
-            if (_running == 0 && !_canExecute()) return;
+            if (_running != 0)
+            {
+                if (queueWhileRunning) _pending++;
+                return;
+            }
+            if (!_canExecute()) return;
             _pending++;
-            if (_running != 0) return;
             _running = 1;
         }
         CanExecuteChanged?.Invoke(this, EventArgs.Empty);

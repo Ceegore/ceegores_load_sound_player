@@ -122,6 +122,45 @@ public sealed class PlaybackCoordinatorTests
     }
 
     [Fact]
+    public async Task FailedDeleteKeepsTrackAndRestartsPlayback()
+    {
+        var output = new RecordingOutput();
+        await using var coordinator = new PlaybackCoordinator(new RecordingDecoder(), output,
+            recycleBin: new ThrowingRecycleBin());
+        await coordinator.ReplacePlaylistAsync([CoreFixtures.Track("one"), CoreFixtures.Track("two")]);
+
+        var error = await Assert.ThrowsAsync<IOException>(() => coordinator.DeleteCurrentAsync().AsTask());
+
+        Assert.Contains("Papierkorb", error.Message);
+        Assert.Equal(2, coordinator.Playlist.Count);
+        Assert.Equal("one.wav", coordinator.Snapshot.CurrentTrack!.FileName);
+        Assert.Equal(PlaybackState.Playing, coordinator.Snapshot.State);
+        Assert.Equal(2, output.Started.Count);
+    }
+
+    [Fact]
+    public async Task GenericPreloadDisposesUncacheableStreamingSources()
+    {
+        var sources = new List<StreamingSource>();
+        var decoder = new RecordingDecoder
+        {
+            Factory = _ =>
+            {
+                var source = new StreamingSource();
+                sources.Add(source);
+                return new DecodedAudio(ReadOnlyMemory<float>.Empty, 8_000, 1, source);
+            }
+        };
+        await using var coordinator = new PlaybackCoordinator(decoder, new RecordingOutput(), new RecordingCache());
+        await coordinator.ReplacePlaylistAsync([CoreFixtures.Track("zero"), CoreFixtures.Track("one"), CoreFixtures.Track("two")]);
+        for (var attempt = 0; attempt < 100 && sources.Count < 3; attempt++) await Task.Delay(2);
+
+        Assert.Equal(3, sources.Count);
+        Assert.All(sources.Skip(1), source => Assert.True(source.Disposed));
+        await sources[0].DisposeAsync();
+    }
+
+    [Fact]
     public async Task EmptyPlaylistIsEmptyAndMissingDecoderIsVisible()
     {
         await using var empty = new PlaybackCoordinator();

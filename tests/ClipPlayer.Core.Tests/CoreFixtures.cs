@@ -95,3 +95,9 @@ internal sealed class RecordingRecycleBin : IRecycleBin
         return ValueTask.CompletedTask;
     }
 }
+
+internal sealed class ThrowingRecycleBin : IRecycleBin
+{
+    public ValueTask MoveToRecycleBinAsync(Track track, CancellationToken cancellationToken) =>
+        ValueTask.FromException(new UnauthorizedAccessException("recycle denied"));
+}

@@ -1,5 +1,5 @@
-using NAudio.Wave;
 using System.Buffers;
+using NAudio.Wave;
 
 namespace ClipPlayer.Audio.Windows;
 
@@ -7,8 +7,8 @@ namespace ClipPlayer.Audio.Windows;
 public sealed class PcmRingBuffer
 {
     private readonly float[] _buffer;
-    private int _read;
-    private int _write;
+    private long _read;
+    private long _write;
 
     public PcmRingBuffer(AudioFormat format, TimeSpan capacity)
     {
@@ -20,13 +20,14 @@ public sealed class PcmRingBuffer
 
     public AudioFormat Format { get; }
     public int CapacitySamples => _buffer.Length;
-    public int AvailableSamples => Math.Max(0, Volatile.Read(ref _write) - Volatile.Read(ref _read));
+    public int AvailableSamples => (int)Math.Min(_buffer.Length,
+        Math.Max(0L, Volatile.Read(ref _write) - Volatile.Read(ref _read)));
 
     public int Write(ReadOnlySpan<float> samples)
     {
         var write = Volatile.Read(ref _write);
         var read = Volatile.Read(ref _read);
-        var count = Math.Min(samples.Length, _buffer.Length - Math.Max(0, write - read));
+        var count = (int)Math.Min(samples.Length, _buffer.Length - Math.Max(0L, write - read));
         CopyIn(samples[..count], write);
         Volatile.Write(ref _write, write + count);
         return count;
@@ -36,23 +37,23 @@ public sealed class PcmRingBuffer
     {
         var read = Volatile.Read(ref _read);
         var write = Volatile.Read(ref _write);
-        var count = Math.Min(destination.Length, Math.Max(0, write - read));
+        var count = (int)Math.Min(destination.Length, Math.Max(0L, write - read));
         CopyOut(destination[..count], read);
         Volatile.Write(ref _read, read + count);
         return count;
     }
 
-    private void CopyIn(ReadOnlySpan<float> source, int position)
+    private void CopyIn(ReadOnlySpan<float> source, long position)
     {
-        var start = position % _buffer.Length;
+        var start = (int)(position % _buffer.Length);
         var first = Math.Min(source.Length, _buffer.Length - start);
         source[..first].CopyTo(_buffer.AsSpan(start, first));
         source[first..].CopyTo(_buffer.AsSpan(0, source.Length - first));
     }
 
-    private void CopyOut(Span<float> destination, int position)
+    private void CopyOut(Span<float> destination, long position)
     {
-        var start = position % _buffer.Length;
+        var start = (int)(position % _buffer.Length);
         var first = Math.Min(destination.Length, _buffer.Length - start);
         _buffer.AsSpan(start, first).CopyTo(destination[..first]);
         _buffer.AsSpan(0, destination.Length - first).CopyTo(destination[first..]);

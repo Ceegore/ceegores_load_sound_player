@@ -7,6 +7,7 @@ public sealed class ProviderTests
 {
     private static readonly float[] FirstSamples = { 1f, 2f };
     private static readonly float[] SecondSamples = { 9f };
+    private static readonly float[] RolloverSamples = { 1f, 2f, 3f, 4f };
     [Fact]
     public void SwitchResetsPositionAndDoesNotReadPreviousClip()
     {
@@ -44,6 +45,45 @@ public sealed class ProviderTests
         Assert.Equal(4, ring.Write(new[] { 3f, 4f, 5f, 6f }));
         Assert.Equal(4, ring.Read(output.AsSpan(0, 4)));
         Assert.Equal(3f, output[0]);
+    }
+
+    [Fact]
+    public void RingBufferRemainsValidBeyondThirtyTwoBitSampleCounters()
+    {
+        var ring = new PcmRingBuffer(new AudioFormat(8_000, 1), TimeSpan.FromSeconds(1));
+        var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var start = (long)int.MaxValue + 100;
+        typeof(PcmRingBuffer).GetField("_read", flags)!.SetValue(ring, start);
+        typeof(PcmRingBuffer).GetField("_write", flags)!.SetValue(ring, start);
+
+        Assert.Equal(4, ring.Write(RolloverSamples));
+        var output = new float[4];
+        Assert.Equal(4, ring.Read(output));
+        Assert.Equal(RolloverSamples, output);
+    }
+
+    [Fact]
+    public async Task ConcurrentSeekAndReadNeverExceedPcmBounds()
+    {
+        var format = new AudioFormat(8_000, 1);
+        using var provider = new SwitchablePcmProvider(format);
+        provider.SwitchTo(new PcmAudio(format, new float[1_024]));
+        var buffer = new byte[128 * sizeof(float)];
+
+        var reads = Task.Run(() =>
+        {
+            for (var i = 0; i < 20_000; i++)
+            {
+                if (provider.Read(buffer, 0, buffer.Length) == 0) provider.Seek(TimeSpan.Zero);
+            }
+        });
+        var seeks = Task.Run(() =>
+        {
+            for (var i = 0; i < 20_000; i++)
+                provider.Seek(i % 2 == 0 ? TimeSpan.Zero : TimeSpan.FromSeconds(1_000d / format.SampleRate));
+        });
+
+        await Task.WhenAll(reads, seeks);
     }
 
     [Fact]

@@ -7,6 +7,9 @@ namespace ClipPlayer.App;
 public partial class MainWindow : Window
 {
     private readonly DispatcherTimer _positionTimer = new() { Interval = TimeSpan.FromMilliseconds(100) };
+    private bool _isSeeking;
+    private bool _closing;
+    private bool _disposed;
     public MainViewModel ViewModel { get; }
 
     public MainWindow(MainViewModel viewModel)
@@ -14,7 +17,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         ViewModel = viewModel;
         DataContext = viewModel;
-        _positionTimer.Tick += (_, _) => viewModel.RefreshPosition();
+        _positionTimer.Tick += (_, _) => { if (!_isSeeking) viewModel.RefreshPosition(); };
         _positionTimer.Start();
     }
 
@@ -40,12 +43,29 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnPositionReleased(object sender, MouseButtonEventArgs e) =>
+    private void OnPositionPressed(object sender, MouseButtonEventArgs e) => _isSeeking = true;
+
+    private void OnPositionReleased(object sender, MouseButtonEventArgs e) => CompleteSeek();
+
+    private void OnPositionLostCapture(object sender, MouseEventArgs e)
+    {
+        if (_isSeeking) CompleteSeek();
+    }
+
+    private void CompleteSeek()
+    {
+        _isSeeking = false;
         _ = ViewModel.SeekToRatioAsync(PositionSlider.Value);
+    }
 
     private async void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
+        if (_disposed) return;
+        e.Cancel = true;
+        if (_closing) return;
+        _closing = true;
         _positionTimer.Stop();
-        await ViewModel.DisposeAsync();
+        try { await ViewModel.DisposeAsync(); }
+        finally { _disposed = true; Close(); }
     }
 }

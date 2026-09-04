@@ -169,8 +169,9 @@ public sealed class PlaybackCoordinator : IAsyncDisposable
         try { await _recycleBin.MoveToRecycleBinAsync(target.Item1, cancellationToken).ConfigureAwait(false); }
         catch (Exception exception)
         {
-            await SetFaultAsync(exception).ConfigureAwait(false);
-            return;
+            try { await SelectAsync(target.Item2, CancellationToken.None).ConfigureAwait(false); }
+            catch { /* Preserve the recycle-bin error while leaving recovery best-effort. */ }
+            throw new IOException("Datei konnte nicht in den Papierkorb verschoben werden.", exception);
         }
 
         var next = await _commands.EnqueueAsync(() =>
@@ -296,7 +297,8 @@ public sealed class PlaybackCoordinator : IAsyncDisposable
             {
                 var index = request.Track == _playlist.Current ? _playlist.CurrentIndex + offset : -1;
                 if (index < 0 || index >= _playlist.Count || request.CancellationToken.IsCancellationRequested) return;
-                await LoadAsync(_playlist[index], request.CancellationToken, CancellationToken.None).ConfigureAwait(false);
+                var preloaded = await LoadAsync(_playlist[index], request.CancellationToken, CancellationToken.None).ConfigureAwait(false);
+                if (preloaded.Stream is { } unusedStream) await unusedStream.DisposeAsync().ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (request.CancellationToken.IsCancellationRequested) { }
@@ -322,14 +324,9 @@ public sealed class PlaybackCoordinator : IAsyncDisposable
     private void InvalidateActiveSelection()
     {
         CancelActiveSelection();
+        _selectionCancellation.Dispose();
         _snapshot = _snapshot with { SelectionGeneration = _snapshot.SelectionGeneration.Next() };
     }
-
-    private ValueTask SetFaultAsync(Exception exception) => _commands.EnqueueAsync(() =>
-    {
-        SetSnapshot(_snapshot with { State = PlaybackState.Faulted, Error = exception.Message });
-        return ValueTask.CompletedTask;
-    });
 
     private void SetSnapshot(PlaybackSnapshot snapshot)
     {
@@ -342,6 +339,7 @@ public sealed class PlaybackCoordinator : IAsyncDisposable
         if (_disposed) return;
         _disposed = true;
         CancelActiveSelection();
+        _selectionCancellation.Dispose();
         await _commands.DisposeAsync().ConfigureAwait(false);
         Task[] preloads;
         lock (_preloadGate) preloads = _preloads.ToArray();

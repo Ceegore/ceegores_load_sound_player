@@ -1,5 +1,5 @@
-using NAudio.Wave;
 using ClipPlayer.Core;
+using NAudio.Wave;
 
 namespace ClipPlayer.Audio.Windows;
 
@@ -106,9 +106,14 @@ public sealed class SwitchablePcmProvider : IWaveProvider, IDisposable
             return read * sizeof(float);
         }
         var audio = slot.Audio!;
-        var sampleCount = Math.Min(count / sizeof(float), audio.Samples.Length - Volatile.Read(ref slot.Position));
-        if (sampleCount <= 0) return 0;
-        var start = Interlocked.Add(ref slot.Position, sampleCount) - sampleCount;
+        int start;
+        int sampleCount;
+        do
+        {
+            start = Volatile.Read(ref slot.Position);
+            sampleCount = Math.Min(count / sizeof(float), audio.Samples.Length - start);
+            if (sampleCount <= 0) return 0;
+        } while (Interlocked.CompareExchange(ref slot.Position, start + sampleCount, start) != start);
         Buffer.BlockCopy(audio.RawSamples, start * sizeof(float), buffer, offset, sampleCount * sizeof(float));
         return sampleCount * sizeof(float);
     }

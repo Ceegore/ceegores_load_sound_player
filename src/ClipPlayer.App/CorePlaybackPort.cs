@@ -1,6 +1,6 @@
+using System.IO;
 using ClipPlayer.Audio.Windows;
 using ClipPlayer.Core;
-using System.IO;
 
 namespace ClipPlayer.App;
 
@@ -67,7 +67,7 @@ public sealed class CorePlaybackPort : IPlaybackPort, IPlaylistPlaybackPort, IPl
         if (index < 0)
         {
             await SetPlaylistAsync([normalized], 0, cancellationToken).ConfigureAwait(false);
-            index = 0;
+            return;
         }
         await _coordinator.SelectAsync(index, cancellationToken).ConfigureAwait(false);
     }
@@ -113,6 +113,11 @@ public sealed class CorePlaybackPort : IPlaybackPort, IPlaylistPlaybackPort, IPl
                 e.SelectionGeneration == 0 ? null : new SelectionGeneration(e.SelectionGeneration)).ConfigureAwait(false);
         }
         catch (ObjectDisposedException) { }
+        catch (Exception exception)
+        {
+            try { await _coordinator.NotifyPlaybackFaultAsync(exception).ConfigureAwait(false); }
+            catch (ObjectDisposedException) { }
+        }
     }
 
     private void OnDeviceChanged(object? sender, EventArgs e)

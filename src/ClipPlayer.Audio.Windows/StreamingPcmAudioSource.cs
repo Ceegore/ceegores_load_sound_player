@@ -15,7 +15,7 @@ public sealed class StreamingPcmAudioSource : IStreamingAudio
     private readonly TaskCompletionSource<bool> _primed = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly object _startGate = new();
     private Task? _worker;
-    private int _consumedSamples;
+    private long _consumedSamples;
     private volatile bool _completed;
     private bool _disposed;
     private const int MinimumPrimeSamples = 4_096;

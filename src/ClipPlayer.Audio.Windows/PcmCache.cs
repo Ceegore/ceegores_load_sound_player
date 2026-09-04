@@ -55,11 +55,12 @@ public sealed class PcmCache : IDisposable
     public void Protect(IEnumerable<CacheKey> keys)
     {
         ArgumentNullException.ThrowIfNull(keys);
+        var snapshot = keys.ToArray();
         lock (_gate)
         {
             _protected.Clear();
-            foreach (var key in keys) _protected.Add(key);
-            _anchor = keys.FirstOrDefault();
+            foreach (var key in snapshot) _protected.Add(key);
+            _anchor = snapshot.Length == 0 ? null : snapshot[0];
             EvictIfNeeded();
         }
     }
@@ -97,7 +98,7 @@ public sealed class PcmCache : IDisposable
 
     public void Clear()
     {
-        lock (_gate) { _entries.Clear(); _lru.Clear(); _protected.Clear(); _bytes = 0; }
+        lock (_gate) { _entries.Clear(); _lru.Clear(); _protected.Clear(); _anchor = null; _bytes = 0; }
     }
 
     /// <summary>Serializes decoder work and loads current plus up to three successors.</summary>

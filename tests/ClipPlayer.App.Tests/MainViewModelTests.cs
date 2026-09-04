@@ -53,6 +53,74 @@ public sealed class MainViewModelTests
     }
 
     [Fact]
+    public async Task FailedDeleteKeepsItemRestartsPlaybackAndReportsError()
+    {
+        using var files = new TempFiles("a.wav", "b.wav");
+        var player = new FakePlaybackPort();
+        await using var model = new MainViewModel(player, recycleBin: new FailingRecycleBin(), confirmation: new AlwaysConfirm());
+        await model.SetItemsAsync(files.Paths, 0);
+
+        await model.DeleteForTestAsync();
+
+        Assert.Equal(2, model.Items.Count);
+        Assert.Equal(files.Paths[0], player.CurrentPath);
+        Assert.True(player.IsPlaying);
+        Assert.Contains("Löschen fehlgeschlagen", model.Status);
+    }
+
+    [Fact]
+    public async Task EmptyReplacementStopsExistingPlayback()
+    {
+        using var files = new TempFiles("a.wav");
+        var player = new FakePlaybackPort();
+        await using var model = new MainViewModel(player);
+        await model.SetItemsAsync(files.Paths);
+
+        await model.SetItemsAsync(Array.Empty<string>());
+
+        Assert.False(player.IsPlaying);
+        Assert.Equal(1, player.StopCalls);
+        Assert.Equal(-1, model.SelectedIndex);
+    }
+
+    [Fact]
+    public async Task NonQueuedCommandIgnoresRepeatedExecutionWhileRunning()
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        var command = new AsyncCommand(async () =>
+        {
+            Interlocked.Increment(ref calls);
+            started.TrySetResult();
+            await release.Task;
+        });
+
+        command.Execute(null);
+        await started.Task;
+        for (var i = 0; i < 10; i++) command.Execute(null);
+        release.TrySetResult();
+        for (var attempt = 0; attempt < 100 && !command.CanExecute(null); attempt++) await Task.Delay(2);
+
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task DisposeWaitsForCanceledSelectionAndIsIdempotent()
+    {
+        using var files = new TempFiles("a.wav", "b.wav");
+        var player = new DelayedPlaybackPort();
+        var model = new MainViewModel(player);
+        await model.SetItemsAsync(files.Paths);
+        var selection = model.SelectRelativeAsync(1);
+        await Task.Delay(1);
+
+        await model.DisposeAsync();
+        await selection;
+        await model.DisposeAsync();
+    }
+
+    [Fact]
     public void DiscoveryFiltersSupportedExtensionsAndSortsNames()
     {
         using var files = new TempFiles("clip10.wav", "clip2.mp3", "clip1.flac", "clip.txt");
@@ -143,11 +211,12 @@ public sealed class MainViewModelTests
         public TimeSpan Duration { get; set; } = TimeSpan.FromSeconds(10);
         public bool IsPlaying { get; protected set; }
         public bool CanSeek { get; set; } = true;
+        public int StopCalls { get; private set; }
         public double Volume { get; set; } = 1;
         public virtual Task PlayAsync(string path, CancellationToken cancellationToken) { CurrentPath = path; IsPlaying = true; return Task.CompletedTask; }
         public Task PauseAsync(CancellationToken cancellationToken) { IsPlaying = false; return Task.CompletedTask; }
         public Task ResumeAsync(CancellationToken cancellationToken) { IsPlaying = true; return Task.CompletedTask; }
-        public Task StopAsync(CancellationToken cancellationToken) { IsPlaying = false; return Task.CompletedTask; }
+        public Task StopAsync(CancellationToken cancellationToken) { StopCalls++; IsPlaying = false; return Task.CompletedTask; }
         public Task SeekAsync(TimeSpan position, CancellationToken cancellationToken) { Position = position; return Task.CompletedTask; }
         public Task PreloadAsync(IReadOnlyList<string> paths, CancellationToken cancellationToken) { Preloaded.AddRange(paths); return Task.CompletedTask; }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
@@ -168,6 +237,7 @@ public sealed class MainViewModelTests
     }
 
     private sealed class FakeRecycleBin : IRecycleBin { public string? LastPath { get; private set; } public void SendToRecycleBin(string path) => LastPath = path; }
+    private sealed class FailingRecycleBin : IRecycleBin { public void SendToRecycleBin(string path) => throw new IOException("denied"); }
     private sealed class AlwaysConfirm : IConfirmation { public bool Confirm(string title, string message) => true; }
 }
 

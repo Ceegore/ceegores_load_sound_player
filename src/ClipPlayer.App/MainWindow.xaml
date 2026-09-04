@@ -21,7 +21,8 @@
       <TextBlock DockPanel.Dock="Left" Text="{Binding PositionText}" Width="48" VerticalAlignment="Center" />
       <TextBlock DockPanel.Dock="Right" Text="{Binding DurationText}" Width="48" TextAlignment="Right" VerticalAlignment="Center" />
       <Slider x:Name="PositionSlider" Minimum="0" Maximum="1" IsEnabled="{Binding CanSeek}" Value="{Binding PositionRatio, Mode=OneWay}"
-              PreviewMouseUp="OnPositionReleased" AutomationProperties.Name="Position" />
+              PreviewMouseDown="OnPositionPressed" PreviewMouseUp="OnPositionReleased"
+              LostMouseCapture="OnPositionLostCapture" AutomationProperties.Name="Position" />
     </DockPanel>
     <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,8">
       <Button Content="Zurück" Command="{Binding PreviousCommand}" AutomationProperties.Name="Vorherigen Sound abspielen" />
