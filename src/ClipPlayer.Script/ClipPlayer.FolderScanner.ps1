@@ -1,10 +1,12 @@
 ﻿function New-FolderEntry {
     param([IO.FileSystemInfo] $Info, [bool] $IsFolder)
+    $name = [string]$Info.Name
     $created = try { $Info.CreationTime } catch { [DateTime]::MinValue }
     $modified = try { $Info.LastWriteTime } catch { [DateTime]::MinValue }
     $size = if ($IsFolder) { [long]0 } else { try { [long]$Info.Length } catch { [long]0 } }
     return [PSCustomObject]@{
-        Name = $Info.Name; Path = $Info.FullName; IsFolder = $IsFolder; IsDrive = $false
+        Name = $name; Path = $Info.FullName; IsFolder = $IsFolder; IsDrive = $false
+        FolderSortKey = if ($IsFolder) { 0 } else { 1 }; NaturalSortKey = Get-NaturalSortKey $name
         Type = if ($IsFolder) { 'File folder' } else { $Info.Extension.TrimStart('.').ToUpperInvariant() + ' audio' }
         TypeSort = if ($IsFolder) { '' } else { $Info.Extension.ToLowerInvariant() }
         Created = $created; Modified = $modified; Size = $size
@@ -23,6 +25,7 @@ function Get-FolderEntries {
                     $_.VolumeLabel + ' (' + $_.Name.TrimEnd('\') + ')'
                 } else { $_.Name }
                 Path = $_.RootDirectory.FullName; IsFolder = $true; IsDrive = $true
+                FolderSortKey = 0; NaturalSortKey = Get-NaturalSortKey $_.Name
                 Type = $_.DriveType.ToString() + ' drive'; TypeSort = $_.DriveType.ToString()
                 Created = [DateTime]::MinValue; Modified = [DateTime]::MinValue
                 Size = if ($_.IsReady) { [long]$_.TotalSize } else { [long]0 }
@@ -42,22 +45,21 @@ function Get-FolderEntries {
 
 function Get-SortedFolderEntries {
     param([object[]] $Entries)
-    $sortField = $script:folderSort
+    foreach ($entry in $Entries) {
+        if ($null -eq $entry.PSObject.Properties['FolderSortKey']) {
+            $entry | Add-Member -NotePropertyName FolderSortKey -NotePropertyValue $(if ($entry.IsFolder) { 0 } else { 1 })
+        }
+        if ($null -eq $entry.PSObject.Properties['NaturalSortKey']) {
+            $entry | Add-Member -NotePropertyName NaturalSortKey -NotePropertyValue (Get-NaturalSortKey $entry.Name)
+        }
+    }
+    $sortProperty = switch ($script:folderSort) {
+        'Date created' { 'Created' }; 'Date modified' { 'Modified' }; 'Type' { 'TypeSort' }
+        'Size' { 'Size' }; default { 'NaturalSortKey' }
+    }
     $descending = $script:folderDescending
-    return @($Entries | Sort-Object `
-        @{ Expression = { if ($_.IsFolder) { 0 } else { 1 } } }, `
-        @{ Expression = {
-            $entry = $_
-            switch ($sortField) {
-                'Date created' { $entry.Created }
-                'Date modified' { $entry.Modified }
-                'Type' { $entry.TypeSort }
-                'Size' { $entry.Size }
-                default { Get-NaturalSortKey $entry.Name }
-            }
-        }; Descending = $descending }, `
-        @{ Expression = { Get-NaturalSortKey $_.Name } }, `
-        @{ Expression = { $_.Name } })
+    return @($Entries | Sort-Object FolderSortKey,
+        @{ Expression = $sortProperty; Descending = $descending }, NaturalSortKey, Name)
 }
 
 # This scriptblock is self-contained so the runspace never evaluates a WPF object
@@ -92,11 +94,13 @@ $script:folderScanWorker = {
     }
     function New-WorkerEntry {
         param($Info, [bool] $IsFolder, [bool] $IsDrive = $false)
+        $name = [string]$Info.Name
         $created = try { $Info.CreationTime } catch { [DateTime]::MinValue }
         $modified = try { $Info.LastWriteTime } catch { [DateTime]::MinValue }
         $size = if ($IsFolder -or $IsDrive) { [long]0 } else { try { [long]$Info.Length } catch { [long]0 } }
         [PSCustomObject]@{
-            Name = [string]$Info.Name; Path = [string]$Info.FullName; IsFolder = $IsFolder; IsDrive = $IsDrive
+            Name = $name; Path = [string]$Info.FullName; IsFolder = $IsFolder; IsDrive = $IsDrive
+            FolderSortKey = if ($IsFolder) { 0 } else { 1 }; NaturalSortKey = ''
             Type = if ($IsFolder) { 'File folder' } else { ([IO.Path]::GetExtension($Info.FullName)).TrimStart('.').ToUpperInvariant() + ' audio' }
             TypeSort = if ($IsFolder) { '' } else { ([IO.Path]::GetExtension($Info.FullName)).ToLowerInvariant() }
             Created = $created; Modified = $modified; Size = $size
@@ -115,6 +119,7 @@ $script:folderScanWorker = {
             } else { $drive.Name }
             $entries.Add([PSCustomObject]@{
                 Name = $driveName; Path = $drive.RootDirectory.FullName; IsFolder = $true; IsDrive = $true
+                FolderSortKey = 0; NaturalSortKey = ''
                 Type = $drive.DriveType.ToString() + ' drive'; TypeSort = $drive.DriveType.ToString()
                 Created = [DateTime]::MinValue; Modified = [DateTime]::MinValue; Size = $driveSize
                 CreatedText = ''; ModifiedText = ''; SizeText = ''
@@ -127,50 +132,44 @@ $script:folderScanWorker = {
             if (Test-WorkerSupportedPath $item.FullName) { $entries.Add((New-WorkerEntry $item $false)) }
         }
     }
-    @($entries.ToArray() | Sort-Object `
-        @{ Expression = { if ($_.IsFolder) { 0 } else { 1 } } }, `
-        @{ Expression = {
-            $entry = $_
-            switch ($SortField) {
-                'Date created' { $entry.Created }
-                'Date modified' { $entry.Modified }
-                'Type' { $entry.TypeSort }
-                'Size' { $entry.Size }
-                default { Get-WorkerNaturalSortKey $entry.Name }
-            }
-        }; Descending = $Descending }, `
-        @{ Expression = { Get-WorkerNaturalSortKey $_.Name } }, `
-        @{ Expression = { $_.Name } })
+    $useNaturalOrder = $entries.Count -le 2048
+    foreach ($entry in $entries) {
+        $entry.NaturalSortKey = if ($useNaturalOrder) { Get-WorkerNaturalSortKey $entry.Name } else { $entry.Name }
+    }
+    $sortProperty = switch ($SortField) {
+        'Date created' { 'Created' }; 'Date modified' { 'Modified' }; 'Type' { 'TypeSort' }
+        'Size' { 'Size' }; default { 'NaturalSortKey' }
+    }
+    @($entries.ToArray() | Sort-Object FolderSortKey,
+        @{ Expression = $sortProperty; Descending = $Descending }, NaturalSortKey, Name)
 }
 
 # Sorting is deliberately independent of the scan worker. A sort of an already
 # loaded directory must never execute Sort-Object on the WPF dispatcher.
 $script:folderSortWorker = {
     param([object[]] $Entries, [string] $SortField, [bool] $Descending, [int] $DelayMilliseconds)
-    function Get-WorkerNaturalSortKey {
-        param([string] $Name)
-        return [regex]::Replace($Name, '\d+', {
-            param($match)
-            $digits = $match.Value.TrimStart('0')
-            if ($digits.Length -eq 0) { $digits = '0' }
-            return ('{0:D8}:{1}' -f $digits.Length, $digits)
-        })
-    }
     if ($DelayMilliseconds -gt 0) { Start-Sleep -Milliseconds $DelayMilliseconds }
-    @($Entries | Sort-Object `
-        @{ Expression = { if ($_.IsFolder) { 0 } else { 1 } } }, `
-        @{ Expression = {
-            $entry = $_
-            switch ($SortField) {
-                'Date created' { $entry.Created }
-                'Date modified' { $entry.Modified }
-                'Type' { $entry.TypeSort }
-                'Size' { $entry.Size }
-                default { Get-WorkerNaturalSortKey $entry.Name }
-            }
-        }; Descending = $Descending }, `
-        @{ Expression = { Get-WorkerNaturalSortKey $_.Name } }, `
-        @{ Expression = { $_.Name } })
+    # Scanner DTOs already include these keys. Keep the worker tolerant of
+    # callers supplying plain entries (including legacy in-memory entries)
+    # without paying the natural-sort cost for a normal large-folder re-sort.
+    foreach ($entry in $Entries) {
+        if ($null -eq $entry.PSObject.Properties['FolderSortKey']) {
+            $entry | Add-Member -NotePropertyName FolderSortKey -NotePropertyValue $(if ($entry.IsFolder) { 0 } else { 1 })
+        }
+        if ($SortField -eq 'Name' -and $null -eq $entry.PSObject.Properties['NaturalSortKey']) {
+            $entry | Add-Member -NotePropertyName NaturalSortKey -NotePropertyValue ([regex]::Replace([string]$entry.Name, '\d+', {
+                param($match)
+                $digits = $match.Value.TrimStart('0'); if ($digits.Length -eq 0) { $digits = '0' }
+                return ('{0:D8}:{1}' -f $digits.Length, $digits)
+            }))
+        }
+    }
+    $sortProperty = switch ($SortField) {
+        'Date created' { 'Created' }; 'Date modified' { 'Modified' }; 'Type' { 'TypeSort' }
+        'Size' { 'Size' }; default { 'NaturalSortKey' }
+    }
+    @($Entries | Sort-Object FolderSortKey,
+        @{ Expression = $sortProperty; Descending = $Descending }, NaturalSortKey, Name)
 }
 
 function Close-FolderScanState {
@@ -367,6 +366,7 @@ function Complete-FolderScan {
         else { [string]$script:folderView.SelectedItem.Path }
     $script:folderPath = $Path
     $script:folderEntries = @($Entries)
+    $script:folderAudioCount = @($script:folderEntries | Where-Object { -not $_.IsFolder }).Count
     $script:folderAddress.Text = if ($null -eq $Path) { 'This PC' } else { $Path }
     # Assigning a ready DTO array lets WPF virtualize item containers.  Adding
     # thousands of items one-by-one in this dispatcher tick freezes the UI.
@@ -376,8 +376,7 @@ function Complete-FolderScan {
     Sync-FolderSelection $(if ($selectionExists) { $selectedPath } else { Get-CurrentPlaybackPath })
     Update-FolderDeleteButton
     if ($script:currentIndex -lt 0) {
-        $audioCount = @($script:folderEntries | Where-Object { -not $_.IsFolder }).Count
-        Set-Status ("Folder: $audioCount supported audio file(s)")
+        Set-Status ("Folder: $($script:folderAudioCount) supported audio file(s)")
     } else {
         $currentPath = Get-CurrentPlaybackPath
         if ($null -ne $currentPath -and $script:playerFailures.ContainsKey($currentPath)) {
@@ -402,9 +401,22 @@ function Complete-FolderScan {
             $initialPlayer = if ($script:players.ContainsKey($InitialAudioPath)) { $script:players[$InitialAudioPath] } else { $null }
             $initialPosition = if ($null -eq $initialPlayer) { [TimeSpan]::Zero } else { $initialPlayer.Position }
             $initialPaused = [bool]$script:isPaused
-            Set-Playlist $audioPaths ([Math]::Max(0, $initialIndex)) -PreserveOrder
+            $initialCompleted = Test-PlaybackCompleted $InitialAudioPath
+            $targetIndex = [Math]::Max(0, $initialIndex)
+            # A short file can end while its large sibling folder is still
+            # enumerating. Once the playlist exists, continue with its next
+            # sibling instead of restarting the finished file.
+            if ($initialCompleted -and $targetIndex -lt ($audioPaths.Count - 1)) { $targetIndex++ }
+            Set-Playlist $audioPaths $targetIndex -PreserveOrder -KnownExisting
             $restoredPath = Get-CurrentPlaybackPath
-            if ($null -ne $restoredPath -and (Test-SamePath $restoredPath $InitialAudioPath) -and
+            if ($initialCompleted -and $targetIndex -eq $initialIndex -and $null -ne $restoredPath -and
+                (Test-SamePath $restoredPath $InitialAudioPath) -and $script:players.ContainsKey($restoredPath)) {
+                $restoredPlayer = $script:players[$restoredPath]
+                $restoredPlayer.Position = [TimeSpan]::Zero; $restoredPlayer.Pause(); $script:isPaused = $true
+                Set-PlaybackCompleted $restoredPath
+                Set-Status ('Finished: ' + [IO.Path]::GetFileName($restoredPath))
+            }
+            elseif (-not $initialCompleted -and $null -ne $restoredPath -and (Test-SamePath $restoredPath $InitialAudioPath) -and
                 $script:players.ContainsKey($restoredPath)) {
                 $restoredPlayer = $script:players[$restoredPath]
                 $restoredPlayer.Position = $initialPosition

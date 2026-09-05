@@ -62,6 +62,7 @@ Describe 'ClipPlayer PowerShell runtime coverage targets' {
             Items = [Collections.ArrayList]::new(); SelectedIndex = -1
         }
         function Close-Player { param([string]$Path) }
+        function Set-PlaylistDisplay { param([string[]]$Paths) }
         function Update-Controls { }
         function Publish-Diagnostics { }
         function Sync-FolderSelection { param([string]$Path) }
@@ -110,6 +111,23 @@ Describe 'ClipPlayer PowerShell runtime coverage targets' {
         $script:pendingPlayback.Count | Should -Be 0
         $script:fakePlayer.Position | Should -Be $position
         $script:fakePlayer.PlayCount | Should -Be 0
+    }
+
+    It 'does not advance after a MediaEnded callback queued before pause' {
+        . (Join-Path $productRoot 'ClipPlayer.PlaybackState.ps1')
+        $path = Join-Path $env:TEMP 'clipplayer-paused-ended.wav'
+        $nextPath = Join-Path $env:TEMP 'clipplayer-next.wav'
+        $player = [PSCustomObject]@{}
+        $script:players = @{ $path = $player }
+        $script:playlist = @($path, $nextPath); $script:currentIndex = 0; $script:isPaused = $true
+        $script:selectedTrack = -1
+        function Select-Track { param([int] $Index) $script:selectedTrack = $Index }
+
+        Invoke-MediaEvent 'Ended' $path $player $null
+
+        $script:selectedTrack | Should -Be -1
+        $script:currentIndex | Should -Be 0
+        $script:isPaused | Should -Be $true
     }
 
     It 'parses and validates the launcher contract' {

@@ -7,17 +7,16 @@ param(
     [string] $ShortcutPath,
     [Alias('FaultInjectionStep', 'TestFaultPhase')]
     [string] $FaultInjectionPhase,
-    [switch] $SkipWindowsIntegration
+    [switch] $SkipWindowsIntegration, [switch] $OpenDefaultAppSettings
 )
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 # Load the signed-host verifier before any installer work so module auto-loading
 # cannot race with another PowerShell process.
-Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
-if ($null -eq (Get-Command Get-AuthenticodeSignature -ErrorAction Stop)) {
-    throw 'Microsoft.PowerShell.Security did not provide Get-AuthenticodeSignature.'
-}
+$signatureCommand = Get-Command Get-AuthenticodeSignature -ErrorAction SilentlyContinue
+if ($null -eq $signatureCommand) { $env:PSModulePath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\Modules'; Import-Module Microsoft.PowerShell.Security -ErrorAction Stop; $signatureCommand = Get-Command Get-AuthenticodeSignature -ErrorAction SilentlyContinue }
+if ($null -eq $signatureCommand) { throw 'Microsoft.PowerShell.Security did not provide Get-AuthenticodeSignature.' }
 
 if ($TestMode) {
     Add-Type -TypeDefinition @'
@@ -70,7 +69,7 @@ if ($TestMode) {
     }
 }
 if ($SkipWindowsIntegration -and -not $TestMode) { throw 'Skipping Windows integration is only available in TestMode.' }
-if (-not [string]::IsNullOrWhiteSpace($FaultInjectionPhase) -and -not $TestMode) { throw 'Fault injection is only available in TestMode.' }
+if (-not [string]::IsNullOrWhiteSpace($FaultInjectionPhase) -and -not $TestMode) { throw 'Fault injection is only available in TestMode.' }; if ($OpenDefaultAppSettings -and $TestMode) { throw 'Opening Default Apps is unavailable in TestMode.' }
 
 $tempDirectory = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
 if ($TestMode) {
@@ -442,7 +441,7 @@ try {
     $committed = $true
     Remove-PostCommitArtifact $rollbackDirectory
     Remove-PostCommitArtifact $integrationSnapshotDirectory
-    Write-Output "Installed ClipPlayer to $(Join-Path $InstallDirectory 'ClipPlayer.ps1')"; if (-not $SkipWindowsIntegration) { Write-Output 'Windows integration registered for WAV, MP3 and FLAC without changing the current default app.' }
+    Write-Output "Installed ClipPlayer to $(Join-Path $InstallDirectory 'ClipPlayer.ps1')"; if (-not $SkipWindowsIntegration) { Write-Output 'Windows integration registered for WAV, MP3 and FLAC without changing the current default app.' }; if ($OpenDefaultAppSettings) { Start-Process 'ms-settings:defaultapps' }
 }
 catch {
     $failure = $_

@@ -21,7 +21,9 @@
     </DockPanel>
     <Grid Grid.Row="1">
       <ListBox x:Name="Playlist" AutomationProperties.Name="Audio files"
-               ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
+               ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+               VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
+               ScrollViewer.CanContentScroll="True" />
       <Grid x:Name="FolderPanel" Visibility="Collapsed">
         <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
         <Grid x:Name="FolderNavigationBar" Margin="0,0,0,8">

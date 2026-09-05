@@ -86,7 +86,10 @@ function Invoke-MediaEvent {
             }
         }
         'Ended' {
-            if (-not $isCurrent) { return }
+            # A MediaEnded callback can already be queued when the user
+            # pauses a very short WAV.  A paused player must never advance
+            # the playlist behind the user's back.
+            if (-not $isCurrent -or $script:isPaused) { return }
             if ($script:currentIndex -lt ($script:playlist.Count - 1)) { Select-Track ($script:currentIndex + 1) }
             else {
                 Set-PlaybackCompleted $Path
@@ -277,10 +280,7 @@ function Restore-PlaybackSnapshot {
     $script:playlist = @($Snapshot.Playlist)
     $script:currentIndex = $Snapshot.Index
     $script:isPaused = [bool]$Snapshot.Paused
-    $script:playlistControl.Items.Clear()
-    foreach ($itemPath in $script:playlist) {
-        $null = $script:playlistControl.Items.Add([IO.Path]::GetFileName($itemPath))
-    }
+    Set-PlaylistDisplay $script:playlist
     foreach ($cachedPath in $Snapshot.CachedPaths) { $null = Get-Player $cachedPath }
     $script:playerFailures = @{}
     foreach ($failurePath in $Snapshot.Failures.Keys) {

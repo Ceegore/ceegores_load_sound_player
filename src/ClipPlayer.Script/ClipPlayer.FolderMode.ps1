@@ -1,6 +1,7 @@
 ﻿$script:folderModeEnabled = $false
 $script:folderPath = $null
 $script:folderEntries = @()
+$script:folderAudioCount = 0
 $script:folderSort = 'Name'
 $script:folderDescending = $false
 $script:folderScanGeneration = 0
@@ -50,6 +51,22 @@ function Format-FileSize {
     return "$Bytes B"
 }
 
+function Set-PlaylistDisplay {
+    param([string[]] $Paths)
+    $labels = [string[]]@($Paths | ForEach-Object { [IO.Path]::GetFileName($_) })
+    $itemsSourceProperty = $script:playlistControl.PSObject.Properties['ItemsSource']
+    if ($null -ne $itemsSourceProperty) {
+        $wasInternal = $script:internalSelection; $script:internalSelection = $true
+        try {
+            $script:playlistControl.ItemsSource = $null
+            $script:playlistControl.ItemsSource = $labels
+        } finally { $script:internalSelection = $wasInternal }
+        return
+    }
+    $script:playlistControl.Items.Clear()
+    foreach ($label in $labels) { $null = $script:playlistControl.Items.Add($label) }
+}
+
 $folderScannerScript = Join-Path $PSScriptRoot 'ClipPlayer.FolderScanner.ps1'
 if (-not (Test-Path -LiteralPath $folderScannerScript -PathType Leaf)) {
     throw "Folder scanner module missing: $folderScannerScript"
@@ -91,6 +108,7 @@ function Apply-FolderSortResult {
     $selectedPath = if ($null -eq $script:folderView.SelectedItem) { $null }
         else { [string]$script:folderView.SelectedItem.Path }
     $script:folderEntries = @($Entries)
+    $script:folderAudioCount = @($script:folderEntries | Where-Object { -not $_.IsFolder }).Count
     $script:folderView.ItemsSource = $script:folderEntries
     $selectionExists = $selectedPath -and
         @($script:folderEntries | Where-Object { Test-SamePath $_.Path $selectedPath }).Count -gt 0
@@ -141,8 +159,7 @@ function Set-FolderPlaybackOrder {
     if ($paths.Count -eq 0 -or [string]::IsNullOrWhiteSpace($currentPath) -or
         -not (@($paths | Where-Object { Test-SamePath $_ $currentPath }).Count)) { return }
     $script:playlist = $paths
-    $script:playlistControl.Items.Clear()
-    foreach ($path in $paths) { $null = $script:playlistControl.Items.Add([IO.Path]::GetFileName($path)) }
+    Set-PlaylistDisplay $paths
     for ($index = 0; $index -lt $paths.Count; $index++) {
         if (Test-SamePath $paths[$index] $currentPath) { $script:currentIndex = $index; break }
     }
@@ -167,10 +184,7 @@ function Remove-PlaylistPath {
     }
     if ($newIndex -lt 0) { $script:currentIndex = -1; $script:isPaused = $true }
     else { $script:currentIndex = $newIndex }
-    $script:playlistControl.Items.Clear()
-    foreach ($itemPath in $script:playlist) {
-        $null = $script:playlistControl.Items.Add([IO.Path]::GetFileName($itemPath))
-    }
+    Set-PlaylistDisplay $script:playlist
     $script:internalSelection = $true
     $script:playlistControl.SelectedIndex = $script:currentIndex
     $script:internalSelection = $false
@@ -204,7 +218,7 @@ function Open-FolderSelection {
     }
     $paths = @($script:folderEntries | Where-Object { -not $_.IsFolder } | ForEach-Object { $_.Path })
     $selectedIndex = [Array]::IndexOf([object[]]$paths, [object]$entry.Path)
-    Set-Playlist $paths ([Math]::Max(0, $selectedIndex)) -PreserveOrder
+    Set-Playlist $paths ([Math]::Max(0, $selectedIndex)) -PreserveOrder -KnownExisting
     Sync-FolderSelection $entry.Path
 }
 
@@ -356,13 +370,21 @@ function Publish-Diagnostics {
     try {
         $currentPath = Get-CurrentPlaybackPath
         $selectedEntry = if ($null -ne $script:folderView) { $script:folderView.SelectedItem } else { $null }
+        # The automation protocol is a state probe, not a second copy of a
+        # large audio library. Serializing tens of thousands of paths on every
+        # dispatcher tick starves the very UI path the probe is meant to test.
+        $diagnosticListLimit = 2048
+        $playlistPaths = if ($script:playlist.Count -le $diagnosticListLimit) { @($script:playlist) } else { @() }
+        $folderItemNames = if ($script:folderEntries.Count -le $diagnosticListLimit) {
+            @($script:folderEntries | ForEach-Object Name)
+        } else { @() }
         $failureMap = [ordered]@{}
         foreach ($failurePath in $script:playerFailures.Keys) {
             $failureMap[$failurePath] = $script:playerFailures[$failurePath]
         }
         $state = [ordered]@{
             ProcessId = $PID; CurrentIndex = $script:currentIndex; PlaylistSelectedIndex = $script:playlistControl.SelectedIndex; CurrentPath = $currentPath
-            PlaylistCount = $script:playlist.Count; PlaylistPaths = @($script:playlist)
+            PlaylistCount = $script:playlist.Count; PlaylistPaths = $playlistPaths
             IsPaused = $script:isPaused
             PositionMilliseconds = if ($currentPath -and $script:players.ContainsKey($currentPath)) {
                 [Math]::Round($script:players[$currentPath].Position.TotalMilliseconds)
@@ -396,10 +418,10 @@ function Publish-Diagnostics {
             FolderSortGeneration = $script:folderSortGeneration
             FolderSortPending = $null -ne $script:folderSortState -or $null -ne $script:folderSortPending -or $script:folderSortOrphans.Count -gt 0
             FolderItemCount = $script:folderEntries.Count
-            FolderAudioCount = @($script:folderEntries | Where-Object { -not $_.IsFolder }).Count
+            FolderAudioCount = $script:folderAudioCount
             FolderSort = $script:folderSort; FolderDescending = $script:folderDescending
             FolderSelectedPath = if ($null -eq $selectedEntry) { $null } else { $selectedEntry.Path }
-            FolderItemNames = @($script:folderEntries | ForEach-Object Name)
+            FolderItemNames = $folderItemNames
             PositionText = $script:positionText.Text; DurationText = $script:durationText.Text
             PositionSliderEnabled = $script:positionSlider.IsEnabled
             PositionSliderValue = [Math]::Round([double]$script:positionSlider.Value, 4)

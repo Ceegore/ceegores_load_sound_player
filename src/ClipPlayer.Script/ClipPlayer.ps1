@@ -92,6 +92,10 @@ $script:lastAutomationCommandAfterIsPaused = $true
 $script:folderWindowClosed = $false
 $script:initialFolderScanPath = $null; $script:initialFolderAudioPath = $null
 
+# Automated diagnostics must exercise the same MediaPlayer path without
+# unexpectedly playing a user-owned sample through the workstation speakers.
+if ($BackgroundTest) { $script:volumeSlider.Value = 0 }
+
 function Set-Status {
     param([string] $Text)
     $script:statusText.Text = $Text
@@ -181,13 +185,15 @@ function Select-Track {
 }
 
 function Set-Playlist {
-    param([string[]] $Paths, [int] $SelectedIndex = 0, [switch] $PreserveOrder)
+    param([string[]] $Paths, [int] $SelectedIndex = 0, [switch] $PreserveOrder, [switch] $KnownExisting)
     $requestedPath = $null
     $inputPaths = @($Paths)
     if ($SelectedIndex -ge 0 -and $SelectedIndex -lt $inputPaths.Count) {
         $requestedPath = $inputPaths[$SelectedIndex]
     }
-    $validPaths = @(Get-UniqueExistingPlaylistPaths $inputPaths $script:playlistPathBase $supportedExtensions)
+    $validPaths = if ($KnownExisting) {
+        @($inputPaths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-SupportedPath $_) })
+    } else { @(Get-UniqueExistingPlaylistPaths $inputPaths $script:playlistPathBase $supportedExtensions) }
     $requestedFullPath = $null
     if (-not [string]::IsNullOrWhiteSpace($requestedPath)) {
         try {
@@ -200,8 +206,7 @@ function Set-Playlist {
     if ($PreserveOrder) { $script:playlist = @($validPaths) }
     else { $script:playlist = @($validPaths |
         Sort-Object @{ Expression = { Get-NaturalSortKey $_ } }, @{ Expression = { $_ } }) }
-    $script:playlistControl.Items.Clear()
-    foreach ($path in $script:playlist) { $null = $script:playlistControl.Items.Add([IO.Path]::GetFileName($path)) }
+    Set-PlaylistDisplay $script:playlist
     if ($script:playlist.Count -eq 0) {
         Reset-PositionDisplay
         Set-Status 'No supported files found'

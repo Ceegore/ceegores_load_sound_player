@@ -29,13 +29,38 @@ Sounds werden wie in der normalen Ansicht vorgeladen.
 ```
 
 Fuer einen SAC-erzwungenen Rechner ist der lokale Git-Checkout der gemessene
-Installationsweg. Beispiel fuer Release `v1.0.0`:
+Installationsweg. Beispiel fuer Release `v1.0.2`:
 
 ```powershell
-git clone --depth 1 --branch v1.0.0 https://github.com/Ceegore/ceegores_load_sound_player.git ClipPlayer
+git clone --depth 1 --branch v1.0.2 https://github.com/Ceegore/ceegores_load_sound_player.git ClipPlayer
 Set-Location .\ClipPlayer
 .\scripts\install-script-player.ps1
 ```
+
+### WAV im Windows Explorer per Doppelklick
+
+Nach der Installation funktioniert **Rechtsklick auf eine WAV > `Play with
+ClipPlayer`** sofort. Damit WAVs direkt per Doppelklick starten, fuehre einmal
+Folgendes aus:
+
+```powershell
+.\scripts\install-script-player.ps1 -OpenDefaultAppSettings
+```
+
+Windows oeffnet die Default-Apps-Einstellungen. Dort nach `ClipPlayer` suchen
+und `.wav` zuweisen (optional auch `.mp3` und `.flac`). Falls ClipPlayer dort
+nicht direkt erscheint: Rechtsklick auf eine WAV > **Oeffnen mit** > **Andere
+App auswaehlen** > `ClipPlayer`, dann **Immer diese App zum Oeffnen von
+.wav-Dateien verwenden** aktivieren. Windows schuetzt diese Wahl; der Installer
+registriert ClipPlayer, ersetzt aber keine bestehende Standard-App heimlich.
+
+Jeder so geoeffnete Sound startet sofort. Parallel liest ClipPlayer nur den
+direkten Ordner ein (keine Unterordner), baut daraus die Geschwister-Playlist
+und laedt den aktuellen sowie die naechsten drei Sounds vor. **Next** bzw.
+Pfeil rechts spielt die naechste Datei in der sichtbaren Reihenfolge. Endet ein
+sehr kurzes angeklicktes WAV noch waehrend der Ordner eingelesen wird, setzt
+ClipPlayer nach dem Laden mit dem naechsten Geschwistersound fort, statt den
+fertigen Sound erneut zu starten.
 
 ### Browser-ZIP unter RemoteSigned
 
@@ -45,8 +70,8 @@ ist dies der kurze, gemessene Ablauf. Den Ordner nur verwenden, wenn er neu/leer
 ist und nur die Dateien dieses Releases enthaelt:
 
 ```powershell
-$zip = "$env:USERPROFILE\Downloads\ClipPlayer-source-1.0.1.zip"
-$release = "C:\Tools\ClipPlayer-1.0.1"
+$zip = "$env:USERPROFILE\Downloads\ClipPlayer-source-1.0.2.zip"
+$release = "C:\Tools\ClipPlayer-1.0.2"
 $expected = ((Get-Content -LiteralPath "${zip}.sha256" -TotalCount 1) -split '\s+')[0]
 if ((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) {
   throw "Release-ZIP stimmt nicht mit der mitgelieferten SHA-256-Datei ueberein."

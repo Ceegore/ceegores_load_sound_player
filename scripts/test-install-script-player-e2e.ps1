@@ -5,6 +5,7 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
+$env:PSModulePath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\Modules'
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $installer = Join-Path $PSScriptRoot 'install-script-player.ps1'
 $sourceRoot = Join-Path $repoRoot 'src\ClipPlayer.Script'
