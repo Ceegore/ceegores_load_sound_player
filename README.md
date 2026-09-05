@@ -37,12 +37,33 @@ Set-Location .\ClipPlayer
 .\scripts\install-script-player.ps1
 ```
 
-Ein per Browser geladenes ZIP kann Mark-of-the-Web tragen und deshalb von
-`RemoteSigned` abgelehnt werden. In diesem Fall weder `Unblock-File` noch
-`ExecutionPolicy Bypass` verwenden: stattdessen den Git-Checkout oder einen von
-der Organisation signierten/freigegebenen Verteilweg benutzen. Abweichende
-WDAC-/AppLocker-Skriptregeln koennen auch den Source-only-Weg sperren; SAC allein
-wurde auf dem Zielsystem erfolgreich gemessen.
+### Browser-ZIP unter RemoteSigned
+
+Ein per Browser geladenes ZIP kann Mark-of-the-Web tragen und deshalb als
+"nicht digital signiert" abgelehnt werden. Fuer das **gepruefte** Release-ZIP
+ist dies der kurze, gemessene Ablauf. Den Ordner nur verwenden, wenn er neu/leer
+ist und nur die Dateien dieses Releases enthaelt:
+
+```powershell
+$zip = "$env:USERPROFILE\Downloads\ClipPlayer-source-1.0.1.zip"
+$release = "C:\Tools\ClipPlayer-1.0.1"
+$expected = ((Get-Content -LiteralPath "${zip}.sha256" -TotalCount 1) -split '\s+')[0]
+if ((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) {
+  throw "Release-ZIP stimmt nicht mit der mitgelieferten SHA-256-Datei ueberein."
+}
+Expand-Archive -LiteralPath $zip -DestinationPath $release
+Get-ChildItem -LiteralPath $release -Recurse -File | Unblock-File
+& "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile `
+  -File "$release\scripts\install-script-player.ps1"
+Start-Process "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\ClipPlayer.lnk"
+```
+
+`Unblock-File` entfernt hier nur die Internet-Markierung nach erfolgreicher
+Hash-Pruefung; es aendert weder Execution Policy noch SAC/Defender. Es ist keine
+Loesung fuer eine echte WDAC-/AppLocker-Skriptregel. In diesem Fall den
+organisatorisch signierten/freigegebenen Verteilweg verwenden. Ein lokaler
+Git-Checkout hat normalerweise keine Internet-Markierung und braucht diesen
+Schritt nicht.
 
 Dies installiert nach `%LOCALAPPDATA%\Programs\ClipPlayer`, legt einen
 Startmenueeintrag an und registriert ClipPlayer unter "Oeffnen mit" sowie im

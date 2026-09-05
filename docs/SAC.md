@@ -17,10 +17,16 @@ Das unterstützte GitHub-Artefakt ist source-only und enthält absichtlich keine
 EXE, DLL, MSI oder MSIX. Der gemessene SAC-Start gilt für lokal erzeugte Skriptdateien
 unter `RemoteSigned`. Browser-Downloads können Mark-of-the-Web tragen; deren
 Ablehnung ist eine Execution-Policy-/Herkunftsentscheidung und kein SAC-Fehler.
-`Unblock-File`, `ExecutionPolicy Bypass`, selbstsignierte Zertifikate und das
-Abschalten von Schutzfunktionen sind keine Workarounds. Für SAC-Systeme wird ein
-lokaler Checkout des getaggten Releases oder ein organisatorisch signierter bzw.
-freigegebener Verteilweg verwendet.
+
+Nach erfolgreicher SHA-256-Prüfung des offiziellen Release-ZIP ist
+`Get-ChildItem -LiteralPath $release -Recurse -File |
+Unblock-File` ein begrenzter, gemessener Workaround für genau diese
+Internet-Markierung. Der Befehl darf nie auf einem breiten Ordner ausgeführt
+werden und ändert weder Execution Policy noch SAC/Defender. Er löst keine echte
+WDAC-/AppLocker-Skriptregel. `ExecutionPolicy Bypass`, Selbstsignieren und das
+Abschalten von Schutzfunktionen bleiben ausgeschlossen. Für eine solche
+Richtliniensperre wird ein organisatorisch signierter bzw. freigegebener
+Verteilweg benötigt.
 
 ## Gemessener lokaler Skriptmodus
 

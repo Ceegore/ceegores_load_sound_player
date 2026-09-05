@@ -106,7 +106,10 @@ Windows WPF MediaPlayer / Media Foundation / Audio Endpoint
 ### Risks
 
 - Ein aus dem Internet markiertes Skript kann unter `RemoteSigned` blockiert werden;
-  Mitigation: kein `Unblock-File`, sondern signierte Distribution oder lokale Installation.
+  Mitigation: offizielles ZIP zuerst per SHA-256 pruefen und nur dessen neuen,
+  exakt abgegrenzten Release-Ordner mit `Unblock-File` von Mark-of-the-Web
+  befreien. Das aendert keine Richtlinie und hilft nicht gegen WDAC/AppLocker;
+  bei einer solchen Sperre ist eine signierte/freigegebene Distribution noetig.
 - PowerShell-Argumentquoting ist fehleranfaellig; Mitigation: leerraumfreier Installationspfad
   und automatisierter registrierter Starttest.
 
