@@ -12,5 +12,6 @@
     <PackageReference Include="xunit.runner.visualstudio">
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
+    <PackageReference Include="coverlet.collector" />
   </ItemGroup>
 </Project>

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using ClipPlayer.Audio.Windows;
 using ClipPlayer.Core;
 using CoreOutput = ClipPlayer.Core.IAudioOutput;
@@ -22,7 +23,9 @@ public sealed class RapidSwitchPerformanceTests
         await coordinator.ReplacePlaylistAsync(tracks);
 
         var samples = new long[switchCount];
-        var random = new Random(0xC11F);
+        var seed = int.TryParse(Environment.GetEnvironmentVariable("CLIPPLAYER_PERF_SEED"), out var configuredSeed)
+            ? configuredSeed : 17;
+        var random = new Random(seed);
         for (var i = 0; i < switchCount; i++)
         {
             var index = random.Next(tracks.Length);
@@ -32,12 +35,29 @@ public sealed class RapidSwitchPerformanceTests
         }
 
         Array.Sort(samples);
-        var p95 = TimeSpan.FromSeconds((double)samples[P95Index(switchCount)] / Stopwatch.Frequency);
+        var p50 = TimeSpan.FromSeconds((double)samples[PIndex(switchCount, 0.50)] / Stopwatch.Frequency);
+        var p95 = TimeSpan.FromSeconds((double)samples[PIndex(switchCount, 0.95)] / Stopwatch.Frequency);
+        var p99 = TimeSpan.FromSeconds((double)samples[PIndex(switchCount, 0.99)] / Stopwatch.Frequency);
+        var maximum = TimeSpan.FromSeconds((double)samples[^1] / Stopwatch.Frequency);
         Assert.Equal(switchCount + 1, output.Started.Count);
         Assert.True(cache.Hits + cache.Misses >= switchCount);
         Assert.InRange(decoder.DecodeCount, 1, cache.Misses);
         Assert.True(cache.Hits >= switchCount / 2);
         Assert.InRange(p95, TimeSpan.Zero, TimeSpan.FromMilliseconds(50));
+        var metricsPath = Environment.GetEnvironmentVariable("CLIPPLAYER_PERF_METRICS_PATH");
+        if (!string.IsNullOrWhiteSpace(metricsPath))
+        {
+            var metrics = new
+            {
+                seed,
+                actualSwitches = switchCount,
+                switchP50Milliseconds = p50.TotalMilliseconds,
+                switchP95Milliseconds = p95.TotalMilliseconds,
+                switchP99Milliseconds = p99.TotalMilliseconds,
+                switchMaximumMilliseconds = maximum.TotalMilliseconds
+            };
+            File.WriteAllText(metricsPath, JsonSerializer.Serialize(metrics));
+        }
     }
 
     [Theory]
@@ -50,6 +70,12 @@ public sealed class RapidSwitchPerformanceTests
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(count);
         return Math.Clamp((int)Math.Ceiling(count * 0.95d) - 1, 0, count - 1);
+    }
+
+    private static int PIndex(int count, double percentile)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(count);
+        return Math.Clamp((int)Math.Ceiling(count * percentile) - 1, 0, count - 1);
     }
 
     [Fact]

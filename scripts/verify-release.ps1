@@ -3,9 +3,11 @@ param(
     [ValidateSet('Core', 'Audio', 'App')]
     [string[]]$TestSuites = @('Core', 'Audio', 'App'),
     [switch]$IncludePerformance,
+    [switch]$IncludeSeededSoak,
+    [switch]$IncludeCoverage,
     [switch]$SkipTests,
     [string]$SbomToolPath,
-    [string]$Version = '0.1.0'
+    [string]$Version = '1.0.0'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -63,15 +65,27 @@ function Invoke-StaticScriptChecks {
     Assert-Condition ($releaseDocs -match '(?i)behauptet keine Coverage') 'Release-Gate darf Coverage nicht als bestanden vortäuschen.'
     $scriptStress = [IO.File]::ReadAllText((Join-Path $root 'scripts\test-script-player-e2e.ps1'))
     Assert-Condition ($scriptStress -notmatch 'AppActivate|SendKeys|SetFocus|InvokePattern') 'Skriptplayer-Dauerlauf darf den globalen Eingabefokus nicht verwenden.'
+    Assert-Condition ($scriptStress -match 'Get-ResourceGateEvaluation') 'Skriptplayer-Dauerlauf benötigt ein Ressourcen-/Fokus-Gate.'
+    Assert-Condition (Test-Path (Join-Path $root 'coverage.runsettings')) 'Instrumentierte Coverage-Konfiguration fehlt.'
+    $coverageScript = [IO.File]::ReadAllText((Join-Path $root 'scripts\measure-coverage.ps1'))
+    Assert-Condition ($coverageScript -match 'NOT-MEASURED') 'Coverage muss nicht messbare Läufe hart ablehnen.'
+    Assert-Condition ($coverageScript -match 'exit 2') 'Coverage muss bei nicht messbaren Läufen fehlschlagen.'
+    Assert-Condition (Test-Path (Join-Path $root 'scripts\test-script-player-seeded-soak.ps1')) 'Seeded-Soak-Gate fehlt.'
 }
 
 Invoke-StaticScriptChecks
 Write-Output 'Release-Gate: folder mode sorting unit test'
 & powershell.exe -NoLogo -NoProfile -File (Join-Path $root 'scripts\test-folder-mode-unit.ps1')
 if ($LASTEXITCODE -ne 0) { throw "Folder-mode-Test fehlgeschlagen (Exit $LASTEXITCODE)." }
+Write-Output 'Release-Gate: folder scan worker unit test'
+& powershell.exe -NoLogo -NoProfile -File (Join-Path $root 'scripts\test-folder-scan-unit.ps1')
+if ($LASTEXITCODE -ne 0) { throw "Folder-scan-Test fehlgeschlagen (Exit $LASTEXITCODE)." }
 Write-Output 'Release-Gate: source-only Skriptplayer-Selftest'
 & powershell.exe -NoLogo -NoProfile -STA -File (Join-Path $root 'src\ClipPlayer.Script\ClipPlayer.ps1') -SelfTest
 if ($LASTEXITCODE -ne 0) { throw "Skriptplayer-Selftest fehlgeschlagen (Exit $LASTEXITCODE)." }
+Write-Output 'Release-Gate: leere/nicht unterstützte/fehlende source-only WPF-Starts'
+& powershell.exe -NoLogo -NoProfile -File (Join-Path $root 'scripts\test-script-player-startup-states-e2e.ps1')
+if ($LASTEXITCODE -ne 0) { throw "WPF-Startzustände fehlgeschlagen (Exit $LASTEXITCODE)." }
 Write-Output 'Release-Gate: locked restore'
 Invoke-NativeChecked 'dotnet' @('restore', 'ClipPlayer.sln', '--locked-mode', '--nologo') 'Locked Restore'
 
@@ -103,6 +117,17 @@ if (-not $SkipTests) {
         if ($performanceCode -eq 42) { $sacBlocked = $true }
         elseif ($performanceCode -ne 0) { throw "Performance-Gate fehlgeschlagen (Exit $performanceCode)." }
     }
+}
+if ($IncludeSeededSoak) {
+    if ($SkipTests) { throw 'Seeded soak cannot be included with SkipTests.' }
+    & powershell.exe -NoLogo -NoProfile -File (Join-Path $root 'scripts\test-script-player-seeded-soak.ps1')
+    $soakCode = $LASTEXITCODE
+    if ($soakCode -eq 42) { $sacBlocked = $true }
+    elseif ($soakCode -ne 0) { throw "Seeded-Soak-Gate fehlgeschlagen (Exit $soakCode)." }
+}
+if ($IncludeCoverage) {
+    & powershell.exe -NoProfile -File (Join-Path $root 'scripts\measure-coverage.ps1')
+    if ($LASTEXITCODE -ne 0) { throw "Coverage-Gate fehlgeschlagen (Exit $LASTEXITCODE)." }
 }
 
 Write-Output 'Release-Gate: x64 self-contained publish ohne Symbole'

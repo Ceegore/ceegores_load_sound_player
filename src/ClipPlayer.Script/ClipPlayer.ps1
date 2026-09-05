@@ -10,7 +10,6 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-
 try { [Diagnostics.Process]::GetCurrentProcess().PriorityClass = [Diagnostics.ProcessPriorityClass]::AboveNormal }
 catch { }
 
@@ -20,87 +19,20 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName Microsoft.VisualBasic
 
 $supportedExtensions = @('.wav', '.mp3', '.flac')
+$script:playlistPathBase = (Get-Location).ProviderPath
+if ([string]::IsNullOrWhiteSpace($script:playlistPathBase)) { $script:playlistPathBase = (Get-Location).Path }
+$playlistPathsScript = Join-Path $PSScriptRoot 'ClipPlayer.PlaylistPaths.ps1'
+if (-not (Test-Path -LiteralPath $playlistPathsScript -PathType Leaf)) { throw "Playlist paths module missing: $playlistPathsScript" }
+. $playlistPathsScript
 $folderModeScript = Join-Path $PSScriptRoot 'ClipPlayer.FolderMode.ps1'
 if (-not (Test-Path -LiteralPath $folderModeScript -PathType Leaf)) { throw "Folder mode module missing: $folderModeScript" }
 . $folderModeScript
-$xaml = @'
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="ClipPlayer" Width="640" Height="520" MinWidth="420" MinHeight="360"
-        WindowStartupLocation="CenterScreen" UseLayoutRounding="True">
-  <Grid Margin="16">
-    <Grid.RowDefinitions>
-      <RowDefinition Height="Auto" />
-      <RowDefinition Height="*" />
-      <RowDefinition Height="Auto" />
-      <RowDefinition Height="Auto" />
-      <RowDefinition Height="Auto" />
-    </Grid.RowDefinitions>
-    <DockPanel Grid.Row="0" Margin="0,0,0,10">
-      <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-        <ToggleButton x:Name="FolderModeToggle" Content="Folder mode" MinWidth="100" MinHeight="34"
-                      Margin="0,0,8,0" AutomationProperties.Name="Folder mode" />
-        <Button x:Name="OpenButton" Content="Open..." MinWidth="80" MinHeight="34" Padding="10,4"
-                AutomationProperties.Name="Open audio files" />
-      </StackPanel>
-      <TextBlock Text="ClipPlayer" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center" />
-    </DockPanel>
-    <Grid Grid.Row="1">
-      <ListBox x:Name="Playlist" AutomationProperties.Name="Audio files"
-               ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
-      <Grid x:Name="FolderPanel" Visibility="Collapsed">
-        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
-        <Grid x:Name="FolderNavigationBar" Margin="0,0,0,8">
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" />
-            <ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" />
-          </Grid.ColumnDefinitions>
-          <Button x:Name="FolderUpButton" Content="Up" MinWidth="48" Margin="0,0,6,0" AutomationProperties.Name="Parent folder" />
-          <TextBox x:Name="FolderAddress" Grid.Column="1" MinHeight="28" VerticalContentAlignment="Center" AutomationProperties.Name="Folder address" />
-          <Button x:Name="FolderGoButton" Grid.Column="2" Content="Go" MinWidth="44" Margin="6,0" AutomationProperties.Name="Open folder address" />
-          <ComboBox x:Name="FolderSort" Grid.Column="3" MinWidth="108" Margin="0,0,6,0" AutomationProperties.Name="Sort field" />
-          <ComboBox x:Name="FolderDirection" Grid.Column="4" MinWidth="94" AutomationProperties.Name="Sort direction" />
-        </Grid>
-        <ListView x:Name="FolderView" Grid.Row="1" AutomationProperties.Name="Folders and audio files">
-          <ListView.View><GridView>
-            <GridViewColumn Header="Name" Width="190" DisplayMemberBinding="{Binding Name}" />
-            <GridViewColumn Header="Date modified" Width="125" DisplayMemberBinding="{Binding ModifiedText}" />
-            <GridViewColumn Header="Date created" Width="125" DisplayMemberBinding="{Binding CreatedText}" />
-            <GridViewColumn Header="Type" Width="85" DisplayMemberBinding="{Binding Type}" />
-            <GridViewColumn Header="Size" Width="70" DisplayMemberBinding="{Binding SizeText}" />
-          </GridView></ListView.View>
-        </ListView>
-      </Grid>
-    </Grid>
-    <DockPanel Grid.Row="2" Margin="0,12,0,0">
-      <TextBlock x:Name="PositionText" DockPanel.Dock="Left" Text="0:00" Width="48"
-                 VerticalAlignment="Center" />
-      <TextBlock x:Name="DurationText" DockPanel.Dock="Right" Text="0:00" Width="48"
-                 TextAlignment="Right" VerticalAlignment="Center" />
-      <Slider x:Name="PositionSlider" Minimum="0" Maximum="1" IsEnabled="False"
-              AutomationProperties.Name="Position" />
-    </DockPanel>
-    <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,8">
-      <Button x:Name="PreviousButton" Content="Previous" MinWidth="78" MinHeight="34" Margin="3"
-              AutomationProperties.Name="Play previous sound" />
-      <Button x:Name="PauseButton" Content="Play / Pause" MinWidth="92" MinHeight="34" Margin="3"
-              AutomationProperties.Name="Pause or resume playback" />
-      <Button x:Name="NextButton" Content="Next" MinWidth="78" MinHeight="34" Margin="3"
-              AutomationProperties.Name="Play next sound" />
-      <Button x:Name="DeleteButton" Content="Delete" MinWidth="78" MinHeight="34" Margin="3"
-              AutomationProperties.Name="Move sound to Recycle Bin" />
-    </StackPanel>
-    <DockPanel Grid.Row="4" LastChildFill="True">
-      <TextBlock DockPanel.Dock="Left" Text="Volume" VerticalAlignment="Center" Margin="3,0,10,0" />
-      <Slider x:Name="VolumeSlider" Minimum="0" Maximum="1" Value="1"
-              AutomationProperties.Name="Volume" />
-      <TextBlock x:Name="StatusText" DockPanel.Dock="Bottom" Text="No file opened"
-                 Margin="3,8,3,0" TextTrimming="CharacterEllipsis"
-                 AutomationProperties.LiveSetting="Polite" />
-    </DockPanel>
-  </Grid>
-</Window>
-'@
+$playbackStateScript = Join-Path $PSScriptRoot 'ClipPlayer.PlaybackState.ps1'
+if (-not (Test-Path -LiteralPath $playbackStateScript -PathType Leaf)) { throw "Playback state module missing: $playbackStateScript" }
+. $playbackStateScript
+$xamlPath = Join-Path $PSScriptRoot 'ClipPlayer.Window.xaml'
+if (-not (Test-Path -LiteralPath $xamlPath -PathType Leaf)) { throw "Window markup missing: $xamlPath" }
+$xaml = Get-Content -LiteralPath $xamlPath -Raw
 
 if ($SelfTest) {
     $probeWindow = New-WindowFromXaml
@@ -138,13 +70,27 @@ $script:statusText = $window.FindName('StatusText')
 $script:playlist = @()
 $script:currentIndex = -1
 $script:players = @{}
+$script:playerHandlers = @{}
+$script:pendingPlayback = @{}
+$script:raceFixtureExpectedPosition = 0
+$script:raceFixtureAppliedPosition = 0
 $script:playerFailures = @{}
+$script:completedPlayback = @{}
 $script:isPaused = $false
 $script:internalSelection = $false
 $script:seeking = $false
 $script:diagnosticTick = 0
 $script:lastAutomationCommandId = 0
 $script:lastAutomationCommandDurationMilliseconds = 0
+$script:lastAutomationCommandName = $null
+$script:lastAutomationCommandBeforeIndex = -1
+$script:lastAutomationCommandBeforePath = $null
+$script:lastAutomationCommandBeforeIsPaused = $true
+$script:lastAutomationCommandAfterIndex = -1
+$script:lastAutomationCommandAfterPath = $null
+$script:lastAutomationCommandAfterIsPaused = $true
+$script:folderWindowClosed = $false
+$script:initialFolderScanPath = $null; $script:initialFolderAudioPath = $null
 
 function Set-Status {
     param([string] $Text)
@@ -168,65 +114,6 @@ function Update-Controls {
     Update-FolderDeleteButton
 }
 
-function Close-Player {
-    param([string] $Path)
-    if ($script:players.ContainsKey($Path)) {
-        $player = $script:players[$Path]
-        $null = $script:players.Remove($Path)
-        try { $player.Close() } catch { }
-    }
-    $null = $script:playerFailures.Remove($Path)
-}
-
-function Invoke-MediaEvent {
-    param([string] $Kind, [string] $Path, $Player, $EventArgs)
-    if (-not $script:players.ContainsKey($Path) -or
-        -not ([object]::ReferenceEquals($script:players[$Path], $Player))) { return }
-    $isCurrent = $script:currentIndex -ge 0 -and $script:playlist[$script:currentIndex] -eq $Path
-    switch ($Kind) {
-        'Failed' {
-            $message = if ($null -ne $EventArgs.ErrorException) { $EventArgs.ErrorException.Message }
-                else { 'Audio could not be opened.' }
-            $script:playerFailures[$Path] = $message
-            if ($isCurrent) {
-                $script:isPaused = $true; Reset-PositionDisplay
-                Set-Status ("Playback error: " + $message); Publish-Diagnostics
-            }
-        }
-        'Opened' {
-            $null = $script:playerFailures.Remove($Path)
-            if ($isCurrent -and -not $script:isPaused) {
-                $Player.Play(); Set-Status ([IO.Path]::GetFileName($Path)); Publish-Diagnostics
-            }
-        }
-        'Ended' {
-            if (-not $isCurrent) { return }
-            if ($script:currentIndex -lt ($script:playlist.Count - 1)) { Select-Track ($script:currentIndex + 1) }
-            else {
-                $Player.Position = [TimeSpan]::Zero; $script:isPaused = $true
-                Set-Status ("Finished: " + [IO.Path]::GetFileName($Path)); Publish-Diagnostics
-            }
-        }
-    }
-}
-
-function Get-Player {
-    param([string] $Path)
-    if ($script:players.ContainsKey($Path)) { return $script:players[$Path] }
-
-    $player = New-Object System.Windows.Media.MediaPlayer
-    $player.Volume = [double]$script:volumeSlider.Value
-    $eventPath = $Path
-    $eventPlayer = $player
-    $eventCallback = ${function:Invoke-MediaEvent}
-    $player.add_MediaFailed(({ param($sender, $failureArgs); & $eventCallback 'Failed' $eventPath $eventPlayer $failureArgs }).GetNewClosure())
-    $player.add_MediaOpened(({ & $eventCallback 'Opened' $eventPath $eventPlayer $null }).GetNewClosure())
-    $player.add_MediaEnded(({ & $eventCallback 'Ended' $eventPath $eventPlayer $null }).GetNewClosure())
-    $script:players[$Path] = $player
-    $player.Open((New-Object Uri($Path, [UriKind]::Absolute)))
-    return $player
-}
-
 function Set-PreloadWindow {
     if ($script:currentIndex -lt 0) { return }
     $first = [Math]::Max(0, $script:currentIndex - 1)
@@ -237,8 +124,16 @@ function Set-PreloadWindow {
         $wanted[$path] = $true
         $null = Get-Player $path
     }
-    foreach ($cachedPath in @($script:players.Keys)) {
-        if (-not $wanted.ContainsKey($cachedPath)) { Close-Player $cachedPath }
+    # Retain already-open players while the five-entry cache has capacity.
+    # Closing every entry just outside the moving window made a direction
+    # change reopen native MediaPlayer resources repeatedly.
+    if ($script:players.Count -gt 5) {
+        $evictionCandidates = @($script:players.Keys | Where-Object { -not $wanted.ContainsKey($_) } |
+            Sort-Object { [Math]::Abs([Array]::IndexOf($script:playlist, $_) - $script:currentIndex) } -Descending)
+        foreach ($cachedPath in $evictionCandidates) {
+            if ($script:players.Count -le 5) { break }
+            Close-Player $cachedPath
+        }
     }
     Publish-Diagnostics
 }
@@ -256,6 +151,7 @@ function Select-Track {
         }
     }
 
+    Reset-PlaybackCompletion
     $script:currentIndex = $Index
     $script:isPaused = $false
     $script:internalSelection = $true
@@ -266,11 +162,18 @@ function Select-Track {
 
     $path = $script:playlist[$Index]
     Set-Status ("Opening: " + [IO.Path]::GetFileName($path))
-    if ($script:playerFailures.ContainsKey($path)) { Close-Player $path }
-    $player = Get-Player $path
+    if ($script:playerFailures.ContainsKey($path)) {
+        # Navigation over a known decode failure must not allocate a fresh
+        # native MediaPlayer every time. An explicit resume remains the retry.
+        $script:isPaused = $true
+        Set-Status ("Playback error: " + $script:playerFailures[$path])
+        Sync-FolderSelection $path
+        Update-Controls
+        Publish-Diagnostics
+        return
+    }
+    $player = Start-PlayerPlayback $path ([TimeSpan]::Zero)
     $player.Volume = [double]$script:volumeSlider.Value
-    $player.Position = [TimeSpan]::Zero
-    $player.Play()
     if ($player.NaturalDuration.HasTimeSpan) { Set-Status ([IO.Path]::GetFileName($path)) }
     Sync-FolderSelection $path
     Update-Controls
@@ -279,10 +182,21 @@ function Select-Track {
 
 function Set-Playlist {
     param([string[]] $Paths, [int] $SelectedIndex = 0, [switch] $PreserveOrder)
+    $requestedPath = $null
+    $inputPaths = @($Paths)
+    if ($SelectedIndex -ge 0 -and $SelectedIndex -lt $inputPaths.Count) {
+        $requestedPath = $inputPaths[$SelectedIndex]
+    }
+    $validPaths = @(Get-UniqueExistingPlaylistPaths $inputPaths $script:playlistPathBase $supportedExtensions)
+    $requestedFullPath = $null
+    if (-not [string]::IsNullOrWhiteSpace($requestedPath)) {
+        try {
+            $requestedFullPath = Resolve-PlaylistPath $requestedPath $script:playlistPathBase
+        } catch { $requestedFullPath = $null }
+    }
     foreach ($cachedPath in @($script:players.Keys)) { Close-Player $cachedPath }
+    Reset-PlaybackCompletion
     $script:currentIndex = -1; $script:isPaused = $true
-    $validPaths = @($Paths | Where-Object { (Test-Path -LiteralPath $_ -PathType Leaf) -and (Test-SupportedPath $_) } |
-        ForEach-Object { [IO.Path]::GetFullPath($_) })
     if ($PreserveOrder) { $script:playlist = @($validPaths) }
     else { $script:playlist = @($validPaths |
         Sort-Object @{ Expression = { Get-NaturalSortKey $_ } }, @{ Expression = { $_ } }) }
@@ -294,7 +208,20 @@ function Set-Playlist {
         Update-Controls
         return
     }
-    Select-Track ([Math]::Max(0, [Math]::Min($SelectedIndex, $script:playlist.Count - 1)))
+    $targetIndex = -1
+    if ($null -ne $requestedFullPath) {
+        for ($index = 0; $index -lt $script:playlist.Count; $index++) {
+            if ([string]::Equals($script:playlist[$index], $requestedFullPath,
+                    [StringComparison]::OrdinalIgnoreCase)) {
+                $targetIndex = $index
+                break
+            }
+        }
+    }
+    if ($targetIndex -lt 0) {
+        $targetIndex = [Math]::Max(0, [Math]::Min($SelectedIndex, $script:playlist.Count - 1))
+    }
+    Select-Track $targetIndex
 }
 
 function Open-AudioFiles {
@@ -305,31 +232,9 @@ function Open-AudioFiles {
     if ($dialog.ShowDialog($script:window)) { Set-Playlist $dialog.FileNames 0 }
 }
 
-function Toggle-Pause {
-    if ($script:currentIndex -lt 0) { return }
-    $path = $script:playlist[$script:currentIndex]
-    if ($script:playerFailures.ContainsKey($path)) { Close-Player $path }
-    $player = Get-Player $path
-    if ($script:isPaused) {
-        if ($player.NaturalDuration.HasTimeSpan -and
-            $player.Position -ge ($player.NaturalDuration.TimeSpan - [TimeSpan]::FromMilliseconds(50))) {
-            $player.Position = [TimeSpan]::Zero
-        }
-        $player.Play()
-        $script:isPaused = $false
-        Set-Status $(if ($player.NaturalDuration.HasTimeSpan) { [IO.Path]::GetFileName($path) }
-            else { "Opening: " + [IO.Path]::GetFileName($path) })
-    } else {
-        $player.Pause()
-        $script:isPaused = $true
-        Set-Status ("Paused: " + [IO.Path]::GetFileName($path))
-    }
-    Publish-Diagnostics
-}
-
 function Remove-CurrentTrack {
     param([switch] $SkipConfirmation)
-    if ($script:currentIndex -lt 0) { return }
+    if ($script:currentIndex -lt 0) { return $false }
     $path = $script:playlist[$script:currentIndex]
     if ($SkipConfirmation) {
         $diagnosticFolder = if ([string]::IsNullOrWhiteSpace($DiagnosticsPath)) { '' }
@@ -344,23 +249,43 @@ function Remove-CurrentTrack {
             "Move '$([IO.Path]::GetFileName($path))' to the Recycle Bin?",
             'ClipPlayer', [Windows.MessageBoxButton]::YesNo,
             [Windows.MessageBoxImage]::Warning, [Windows.MessageBoxResult]::No)
-        if ($answer -ne [Windows.MessageBoxResult]::Yes) { return }
+        if ($answer -ne [Windows.MessageBoxResult]::Yes) { return $false }
     }
 
-    Close-Player $path
+    $currentPlayer = if ($script:players.ContainsKey($path)) { $script:players[$path] } else { $null }
+    $snapshotFailures = @{}
+    foreach ($failurePath in $script:playerFailures.Keys) {
+        $snapshotFailures[$failurePath] = $script:playerFailures[$failurePath]
+    }
+    $snapshot = [PSCustomObject]@{
+        Playlist = @($script:playlist)
+        Index = $script:currentIndex
+        Path = $path
+        Position = if ($null -eq $currentPlayer) { [TimeSpan]::Zero } else { $currentPlayer.Position }
+        Paused = [bool]$script:isPaused
+        CachedPaths = @($script:players.Keys)
+        Failures = $snapshotFailures
+        SelectionIndex = $script:playlistControl.SelectedIndex
+        FolderSelectionPath = if ($null -eq $script:folderView -or $null -eq $script:folderView.SelectedItem) {
+            $null
+        } else { [string]$script:folderView.SelectedItem.Path }
+    }
     try {
         [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile(
             $path,
             [Microsoft.VisualBasic.FileIO.UIOption]::OnlyErrorDialogs,
             [Microsoft.VisualBasic.FileIO.RecycleOption]::SendToRecycleBin)
     } catch {
-        Select-Track $script:currentIndex
+        Restore-PlaybackSnapshot $snapshot
         Set-Status ("Delete failed: " + $_.Exception.Message)
-        return
+        Publish-Diagnostics
+        return $false
     }
+    Close-Player $path
     $remaining = @($script:playlist | Where-Object { $_ -ne $path })
-    if ($remaining.Count -eq 0) { Set-Playlist @(); return }
+    if ($remaining.Count -eq 0) { Set-Playlist @(); return $true }
     Set-Playlist $remaining ([Math]::Min($script:currentIndex, $remaining.Count - 1)) -PreserveOrder
+    return $true
 }
 
 function Invoke-PlayerCommand {
@@ -371,6 +296,9 @@ function Invoke-PlayerCommand {
         'TogglePause' { Toggle-Pause }
         'Delete' { if (-not (Invoke-FolderDelete)) { Remove-CurrentTrack } }
         'DeleteConfirmedTestFixture' { Remove-CurrentTrack -SkipConfirmation }
+        'InjectStaleFailedEventTestFixture' { Invoke-StaleFailedEventTestFixture -BackgroundTest:$BackgroundTest }
+        'InjectEndedRestartRaceTestFixture' { Invoke-EndedRestartRaceTestFixture -BackgroundTest:$BackgroundTest }
+        'InjectPausedEndedResumeRaceTestFixture' { Invoke-PausedEndedResumeRaceTestFixture -BackgroundTest:$BackgroundTest }
         'Close' { $script:window.Close() }
         default { if (-not (Invoke-FolderAutomationCommand $Command)) { throw "Unknown player command: $Command" } }
     }
@@ -381,22 +309,44 @@ function Read-AutomationCommand {
         -not (Test-Path -LiteralPath $AutomationCommandPath -PathType Leaf)) { return }
     $commandId = $null
     $commandWatch = $null
+    $command = $null
     try {
-        $raw = [IO.File]::ReadAllText($AutomationCommandPath)
+        $commandStream = [IO.File]::Open($AutomationCommandPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+        try { $raw = [IO.StreamReader]::new($commandStream).ReadToEnd() } finally { $commandStream.Dispose() }
         $separator = $raw.IndexOf('|')
         if ($separator -le 0) { return }
         $commandId = [long]::Parse($raw.Substring(0, $separator), [Globalization.CultureInfo]::InvariantCulture)
         if ($commandId -le $script:lastAutomationCommandId) { return }
+        $command = $raw.Substring($separator + 1)
+        # Capture the command boundary on the dispatcher, immediately before
+        # invoking it.  A short track can raise MediaEnded between the
+        # harness' Read-State and this tick; the harness must validate
+        # Next/Previous against this atomic boundary instead of stale state.
+        $script:lastAutomationCommandName = $command
+        $script:lastAutomationCommandBeforeIndex = $script:currentIndex
+        $script:lastAutomationCommandBeforePath = Get-CurrentPlaybackPath
+        $script:lastAutomationCommandBeforeIsPaused = [bool]$script:isPaused
+        $script:lastAutomationCommandAfterIndex = -1
+        $script:lastAutomationCommandAfterPath = $null
+        $script:lastAutomationCommandAfterIsPaused = $true
         $commandWatch = [Diagnostics.Stopwatch]::StartNew()
-        Invoke-PlayerCommand $raw.Substring($separator + 1)
+        Invoke-PlayerCommand $command
         $commandWatch.Stop()
         $script:lastAutomationCommandDurationMilliseconds = $commandWatch.Elapsed.TotalMilliseconds
         $script:lastAutomationCommandId = $commandId
+        $script:lastAutomationCommandAfterIndex = $script:currentIndex
+        $script:lastAutomationCommandAfterPath = Get-CurrentPlaybackPath
+        $script:lastAutomationCommandAfterIsPaused = [bool]$script:isPaused
         Publish-Diagnostics
     } catch [IO.IOException] { return }
     catch {
         if ($null -ne $commandWatch) { $commandWatch.Stop(); $script:lastAutomationCommandDurationMilliseconds = $commandWatch.Elapsed.TotalMilliseconds }
-        if ($null -ne $commandId) { $script:lastAutomationCommandId = $commandId }
+        if ($null -ne $commandId) {
+            $script:lastAutomationCommandId = $commandId
+            $script:lastAutomationCommandAfterIndex = $script:currentIndex
+            $script:lastAutomationCommandAfterPath = Get-CurrentPlaybackPath
+            $script:lastAutomationCommandAfterIsPaused = [bool]$script:isPaused
+        }
         Set-Status ("Automation error: $($_.Exception.Message) [$($_.ScriptStackTrace -replace '[\r\n]+', ' ')]")
         Publish-Diagnostics
     }
@@ -446,18 +396,29 @@ $script:positionSlider.Add_LostMouseCapture({ if ($script:seeking) { Complete-Se
 $timer = New-Object Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds($(if ($BackgroundTest) { 50 } else { 200 }))
 $timer.Add_Tick({
+    if ($null -ne $script:initialFolderScanPath) {
+        $scanPath = $script:initialFolderScanPath
+        $initialAudioPath = $script:initialFolderAudioPath
+        $script:initialFolderScanPath = $null
+        $script:initialFolderAudioPath = $null
+        Start-FolderScan $scanPath $initialAudioPath
+    }
+    Complete-FolderScanIfReady
+    Complete-FolderSortIfReady
     Read-AutomationCommand
-    if ($script:currentIndex -lt 0) { return }
-    $path = $script:playlist[$script:currentIndex]
-    if (-not $script:players.ContainsKey($path)) { return }
-    $player = $script:players[$path]
-    $script:positionText.Text = Convert-TimeText $player.Position
-    if ($player.NaturalDuration.HasTimeSpan) {
-        $duration = $player.NaturalDuration.TimeSpan
-        $script:durationText.Text = Convert-TimeText $duration
-        $script:positionSlider.IsEnabled = $true
-        if (-not $script:seeking -and $duration.TotalSeconds -gt 0) {
-            $script:positionSlider.Value = [Math]::Min(1, $player.Position.TotalSeconds / $duration.TotalSeconds)
+    if ($script:currentIndex -ge 0 -and $script:currentIndex -lt $script:playlist.Count) {
+        $path = $script:playlist[$script:currentIndex]
+        if ($script:players.ContainsKey($path)) {
+            $player = $script:players[$path]
+            $script:positionText.Text = Convert-TimeText $player.Position
+            if ($player.NaturalDuration.HasTimeSpan) {
+                $duration = $player.NaturalDuration.TimeSpan
+                $script:durationText.Text = Convert-TimeText $duration
+                $script:positionSlider.IsEnabled = $true
+                if (-not $script:seeking -and $duration.TotalSeconds -gt 0) {
+                    $script:positionSlider.Value = [Math]::Min(1, $player.Position.TotalSeconds / $duration.TotalSeconds)
+                }
+            }
         }
     }
     if (-not [string]::IsNullOrWhiteSpace($DiagnosticsPath)) {
@@ -470,6 +431,9 @@ $timer.Add_Tick({
 })
 $script:window.Add_Closed({
     $timer.Stop()
+    $script:folderWindowClosed = $true
+    Stop-FolderScan -Invalidate
+    Stop-FolderSort -Invalidate
     foreach ($cachedPath in @($script:players.Keys)) { Close-Player $cachedPath }
     Publish-Diagnostics
 })
@@ -480,19 +444,30 @@ if ($BackgroundTest) {
     $script:window.ShowInTaskbar = $false
     $script:window.WindowState = [Windows.WindowState]::Minimized
 }
-if (Test-SupportedPath $AudioPath -and (Test-Path -LiteralPath $AudioPath -PathType Leaf)) {
-    $fullPath = [IO.Path]::GetFullPath($AudioPath)
-    $folder = [IO.Path]::GetDirectoryName($fullPath)
-    try { $files = @(Get-ChildItem -LiteralPath $folder -File | Where-Object { Test-SupportedPath $_.FullName } |
-        ForEach-Object { $_.FullName }) } catch { $files = @() }
-    if ($files -notcontains $fullPath) { $files += $fullPath }
-    $files = @($files | Sort-Object @{ Expression = { Get-NaturalSortKey $_ } }, @{ Expression = { $_ } })
-    $selected = -1
-    for ($index = 0; $index -lt $files.Count; $index++) {
-        if ([string]::Equals($files[$index], $fullPath, [StringComparison]::OrdinalIgnoreCase)) { $selected = $index; break }
+if (-not [string]::IsNullOrWhiteSpace($AudioPath)) {
+    $resolvedAudioPath = $null
+    try { $resolvedAudioPath = Resolve-PlaylistPath $AudioPath $script:playlistPathBase } catch { }
+    if ($null -eq $resolvedAudioPath) {
+        Set-Status 'Audio file was not found.'
     }
-    Set-Playlist $files ([Math]::Max(0, $selected))
+    elseif (-not (Test-SupportedPath $resolvedAudioPath)) {
+        Set-Status 'Unsupported audio format.'
+    }
+    elseif (-not (Test-Path -LiteralPath $resolvedAudioPath -PathType Leaf)) {
+        Set-Status 'Audio file was not found.'
+    }
+    else {
+        $fullPath = $resolvedAudioPath
+        # Defer sibling enumeration so a large directory cannot delay startup.
+        Set-Playlist @($fullPath) 0 -PreserveOrder
+        $script:initialFolderScanPath = [IO.Path]::GetDirectoryName($fullPath)
+        $script:initialFolderAudioPath = $fullPath
+    }
 }
+else {
+    Set-Status 'Ready. Open an audio file or folder.'
+}
+Publish-Diagnostics
 
 $timer.Start()
-$null = $script:window.ShowDialog()
+$null = $script:window.ShowDialog(); Stop-AllFolderWork

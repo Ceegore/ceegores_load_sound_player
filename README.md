@@ -28,6 +28,22 @@ Sounds werden wie in der normalen Ansicht vorgeladen.
 .\scripts\install-script-player.ps1
 ```
 
+Fuer einen SAC-erzwungenen Rechner ist der lokale Git-Checkout der gemessene
+Installationsweg. Beispiel fuer Release `v1.0.0`:
+
+```powershell
+git clone --depth 1 --branch v1.0.0 https://github.com/Ceegore/ceegores_load_sound_player.git ClipPlayer
+Set-Location .\ClipPlayer
+.\scripts\install-script-player.ps1
+```
+
+Ein per Browser geladenes ZIP kann Mark-of-the-Web tragen und deshalb von
+`RemoteSigned` abgelehnt werden. In diesem Fall weder `Unblock-File` noch
+`ExecutionPolicy Bypass` verwenden: stattdessen den Git-Checkout oder einen von
+der Organisation signierten/freigegebenen Verteilweg benutzen. Abweichende
+WDAC-/AppLocker-Skriptregeln koennen auch den Source-only-Weg sperren; SAC allein
+wurde auf dem Zielsystem erfolgreich gemessen.
+
 Dies installiert nach `%LOCALAPPDATA%\Programs\ClipPlayer`, legt einen
 Startmenueeintrag an und registriert ClipPlayer unter "Oeffnen mit" sowie im
 Explorer-Kontextmenue. Die bestehende Standard-App wird nicht veraendert; die Auswahl

@@ -78,7 +78,7 @@ Beispiel nach dem Publish:
 dotnet publish .\src\ClipPlayer.App\ClipPlayer.App.csproj -c Release -r win-x64 `
   --self-contained true --no-restore -o .\artifacts\publish
 powershell -NoProfile -File .\scripts\generate-sbom.ps1 `
-  -BuildDrop .\artifacts\publish -Version 0.1.0
+  -BuildDrop .\artifacts\publish -Version 1.0.0
 ```
 
 Das Script verlangt genau ein gültiges `manifest.spdx.json`, eine SPDX-Version,

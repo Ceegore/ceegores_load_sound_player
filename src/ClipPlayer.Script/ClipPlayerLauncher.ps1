@@ -4,7 +4,8 @@ param(
     [string] $AudioPath,
     [string] $DiagnosticsPath,
     [string] $AutomationCommandPath,
-    [switch] $BackgroundTest
+    [switch] $BackgroundTest,
+    [switch] $SelfTest
 )
 
 Set-StrictMode -Version 2.0
@@ -17,4 +18,4 @@ $playerScript = Join-Path $PSScriptRoot 'ClipPlayer.ps1'
 if (-not (Test-Path -LiteralPath $playerScript -PathType Leaf)) { throw "Player script missing: $playerScript" }
 
 & $playerScript -AudioPath $AudioPath -DiagnosticsPath $DiagnosticsPath `
-    -AutomationCommandPath $AutomationCommandPath -BackgroundTest:$BackgroundTest
+    -AutomationCommandPath $AutomationCommandPath -BackgroundTest:$BackgroundTest -SelfTest:$SelfTest

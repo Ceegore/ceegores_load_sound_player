@@ -1,7 +1,7 @@
 ﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory)] [string]$BuildDrop,
-    [string]$Version = '0.1.0',
+    [string]$Version = '1.0.0',
     [string]$PackageName = 'ClipPlayer',
     [string]$Namespace = 'https://sbom.clipplayer.invalid/',
     [string]$ToolPath
@@ -61,6 +61,7 @@ if (-not $process.HasExited) {
     try { $process.Kill($true) } catch { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
     throw 'SBOM-Gate: sbom-tool überschritt das 10-Minuten-Timeout.'
 }
+$process.WaitForExit()
 $process.Refresh()
 Assert-Condition ($process.ExitCode -eq 0) "sbom-tool v$toolVersion meldete Exit $($process.ExitCode)."
 

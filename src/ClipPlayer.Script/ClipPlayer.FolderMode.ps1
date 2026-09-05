@@ -3,6 +3,17 @@ $script:folderPath = $null
 $script:folderEntries = @()
 $script:folderSort = 'Name'
 $script:folderDescending = $false
+$script:folderScanGeneration = 0
+$script:folderScan = $null
+$script:folderScanPending = $null
+$script:folderWindowClosed = $false
+$script:folderScanOrphans = New-Object Collections.Generic.List[object]
+$script:folderSortGeneration = 0
+$script:folderSortState = $null
+$script:folderSortPending = $null
+$script:folderSortOrphans = New-Object Collections.Generic.List[object]
+$script:folderSortTestDelayMilliseconds = 0
+$script:folderRunspacePool = $null
 
 function Test-SupportedPath {
     param([string] $Path)
@@ -39,67 +50,11 @@ function Format-FileSize {
     return "$Bytes B"
 }
 
-function New-FolderEntry {
-    param([IO.FileSystemInfo] $Info, [bool] $IsFolder)
-    $created = try { $Info.CreationTime } catch { [DateTime]::MinValue }
-    $modified = try { $Info.LastWriteTime } catch { [DateTime]::MinValue }
-    $size = if ($IsFolder) { [long]0 } else { try { [long]$Info.Length } catch { [long]0 } }
-    return [PSCustomObject]@{
-        Name = $Info.Name; Path = $Info.FullName; IsFolder = $IsFolder; IsDrive = $false
-        Type = if ($IsFolder) { 'File folder' } else { $Info.Extension.TrimStart('.').ToUpperInvariant() + ' audio' }
-        TypeSort = if ($IsFolder) { '' } else { $Info.Extension.ToLowerInvariant() }
-        Created = $created; Modified = $modified; Size = $size
-        CreatedText = if ($created -eq [DateTime]::MinValue) { '' } else { $created.ToString('g') }
-        ModifiedText = if ($modified -eq [DateTime]::MinValue) { '' } else { $modified.ToString('g') }
-        SizeText = if ($IsFolder) { '' } else { Format-FileSize $size }
-    }
+$folderScannerScript = Join-Path $PSScriptRoot 'ClipPlayer.FolderScanner.ps1'
+if (-not (Test-Path -LiteralPath $folderScannerScript -PathType Leaf)) {
+    throw "Folder scanner module missing: $folderScannerScript"
 }
-
-function Get-FolderEntries {
-    param([AllowNull()][string] $Path)
-    if ([string]::IsNullOrWhiteSpace($Path)) {
-        return @([IO.DriveInfo]::GetDrives() | ForEach-Object {
-            [PSCustomObject]@{
-                Name = if ($_.IsReady -and -not [string]::IsNullOrWhiteSpace($_.VolumeLabel)) {
-                    $_.VolumeLabel + ' (' + $_.Name.TrimEnd('\') + ')'
-                } else { $_.Name }
-                Path = $_.RootDirectory.FullName; IsFolder = $true; IsDrive = $true
-                Type = $_.DriveType.ToString() + ' drive'; TypeSort = $_.DriveType.ToString()
-                Created = [DateTime]::MinValue; Modified = [DateTime]::MinValue
-                Size = if ($_.IsReady) { [long]$_.TotalSize } else { [long]0 }
-                CreatedText = ''; ModifiedText = ''; SizeText = ''
-            }
-        })
-    }
-
-    $directory = New-Object IO.DirectoryInfo $Path
-    $entries = New-Object Collections.Generic.List[object]
-    foreach ($item in $directory.GetDirectories()) { $entries.Add((New-FolderEntry $item $true)) }
-    foreach ($item in $directory.GetFiles()) {
-        if (Test-SupportedPath $item.FullName) { $entries.Add((New-FolderEntry $item $false)) }
-    }
-    return @($entries.ToArray())
-}
-
-function Get-SortedFolderEntries {
-    param([object[]] $Entries)
-    $sortField = $script:folderSort
-    $descending = $script:folderDescending
-    return @($Entries | Sort-Object `
-        @{ Expression = { if ($_.IsFolder) { 0 } else { 1 } } }, `
-        @{ Expression = {
-            $entry = $_
-            switch ($sortField) {
-                'Date created' { $entry.Created }
-                'Date modified' { $entry.Modified }
-                'Type' { $entry.TypeSort }
-                'Size' { $entry.Size }
-                default { Get-NaturalSortKey $entry.Name }
-            }
-        }; Descending = $descending }, `
-        @{ Expression = { Get-NaturalSortKey $_.Name } }, `
-        @{ Expression = { $_.Name } })
-}
+. $folderScannerScript
 
 function Test-SamePath {
     param([AllowNull()][string] $Left, [AllowNull()][string] $Right)
@@ -131,40 +86,52 @@ function Update-FolderDeleteButton {
     $script:deleteButton.IsEnabled = $null -ne $entry -and -not $entry.IsFolder
 }
 
-function Render-FolderEntries {
+function Apply-FolderSortResult {
+    param([object[]] $Entries, [AllowNull()][string] $PreviousStatus)
     $selectedPath = if ($null -eq $script:folderView.SelectedItem) { $null }
         else { [string]$script:folderView.SelectedItem.Path }
-    $script:folderEntries = @(Get-SortedFolderEntries $script:folderEntries)
-    $script:folderView.Items.Clear()
-    foreach ($entry in $script:folderEntries) { $null = $script:folderView.Items.Add($entry) }
+    $script:folderEntries = @($Entries)
+    $script:folderView.ItemsSource = $script:folderEntries
     $selectionExists = $selectedPath -and
         @($script:folderEntries | Where-Object { Test-SamePath $_.Path $selectedPath }).Count -gt 0
     Sync-FolderSelection $(if ($selectionExists) { $selectedPath } else { Get-CurrentPlaybackPath })
     Update-FolderDeleteButton
+    Set-FolderPlaybackOrder
+    if ($script:statusText.Text -eq 'Folder sorting...') { Set-Status $PreviousStatus }
+    Publish-Diagnostics
+}
+
+function Resolve-FolderPath {
+    param([AllowNull()][string] $Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
+    $candidatePath = $Path
+    # An existing literal path wins; expansion is only a fallback for tokens.
+    if (-not (Test-Path -LiteralPath $candidatePath -PathType Container)) {
+        $expandedPath = [Environment]::ExpandEnvironmentVariables($candidatePath)
+        if (($expandedPath -ne $candidatePath) -and
+            (Test-Path -LiteralPath $expandedPath -PathType Container)) {
+            $candidatePath = $expandedPath
+        }
+    }
+    if (-not (Test-Path -LiteralPath $candidatePath -PathType Container)) {
+        throw "Folder does not exist: $candidatePath"
+    }
+    return [IO.Path]::GetFullPath($candidatePath)
 }
 
 function Show-Folder {
     param([AllowNull()][string] $Path)
     try {
-        $resolvedPath = if ([string]::IsNullOrWhiteSpace($Path)) { $null }
-            else { [IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($Path)) }
-        if ($null -ne $resolvedPath -and -not (Test-Path -LiteralPath $resolvedPath -PathType Container)) {
-            throw "Folder does not exist: $resolvedPath"
-        }
-        $entries = @(Get-FolderEntries $resolvedPath)
+        $resolvedPath = Resolve-FolderPath $Path
     } catch {
+        # An invalid navigation must invalidate and retire any older scan;
+        # otherwise its late completion can replace the last valid folder.
+        Stop-FolderScan -Invalidate
+        Stop-FolderSort -Invalidate
         Set-Status ('Folder unavailable: ' + $_.Exception.Message)
         return $false
     }
-    $script:folderPath = $resolvedPath
-    $script:folderEntries = $entries
-    $script:folderAddress.Text = if ($null -eq $resolvedPath) { 'This PC' } else { $resolvedPath }
-    Render-FolderEntries
-    if ($script:currentIndex -lt 0) {
-        $audioCount = @($entries | Where-Object { -not $_.IsFolder }).Count
-        Set-Status ("Folder: $audioCount supported audio file(s)")
-    }
-    Publish-Diagnostics
+    Start-FolderScan $resolvedPath
     return $true
 }
 
@@ -186,12 +153,43 @@ function Set-FolderPlaybackOrder {
     Update-Controls
 }
 
+function Remove-PlaylistPath {
+    param([Parameter(Mandatory = $true)][string] $Path)
+    $remaining = @($script:playlist | Where-Object { -not (Test-SamePath $_ $Path) })
+    if ($remaining.Count -eq $script:playlist.Count) { return }
+    $currentPath = Get-CurrentPlaybackPath
+    $script:playlist = @($remaining)
+    $newIndex = -1
+    if (-not [string]::IsNullOrWhiteSpace($currentPath)) {
+        for ($index = 0; $index -lt $script:playlist.Count; $index++) {
+            if (Test-SamePath $script:playlist[$index] $currentPath) { $newIndex = $index; break }
+        }
+    }
+    if ($newIndex -lt 0) { $script:currentIndex = -1; $script:isPaused = $true }
+    else { $script:currentIndex = $newIndex }
+    $script:playlistControl.Items.Clear()
+    foreach ($itemPath in $script:playlist) {
+        $null = $script:playlistControl.Items.Add([IO.Path]::GetFileName($itemPath))
+    }
+    $script:internalSelection = $true
+    $script:playlistControl.SelectedIndex = $script:currentIndex
+    $script:internalSelection = $false
+    if ($script:currentIndex -ge 0) { Set-PreloadWindow }
+    Update-Controls
+    Publish-Diagnostics
+}
+
 function Set-FolderSort {
     param([string] $Field, [bool] $Descending)
     $script:folderSort = $Field
     $script:folderDescending = $Descending
-    Render-FolderEntries
-    Set-FolderPlaybackOrder
+    $scanRequest = if ($null -ne $script:folderScanPending) { $script:folderScanPending }
+        elseif ($null -ne $script:folderScan) { $script:folderScan } else { $null }
+    if ($null -ne $scanRequest) {
+        $pendingPath = $scanRequest.Path
+        $initialAudioPath = $scanRequest.InitialAudioPath
+        Start-FolderScan $pendingPath $initialAudioPath
+    } else { Start-FolderSort }
     Publish-Diagnostics
 }
 
@@ -242,7 +240,12 @@ function Set-FolderMode {
         }
         if (-not (Show-Folder $target)) { $null = Show-Folder $null }
         if (-not $BackgroundTest) { $script:folderView.Focus() | Out-Null }
-    } else { Update-Controls; Publish-Diagnostics }
+    } else {
+        Stop-FolderScan -Invalidate
+        Stop-FolderSort -Invalidate
+        Update-Controls
+        Publish-Diagnostics
+    }
 }
 
 function Invoke-FolderDelete {
@@ -252,8 +255,8 @@ function Invoke-FolderDelete {
     if ($null -eq $entry -or $entry.IsFolder) { Set-Status 'Select an audio file to delete'; return $true }
     $path = [string]$entry.Path
     if (Test-SamePath $path (Get-CurrentPlaybackPath)) {
-        Remove-CurrentTrack -SkipConfirmation:$SkipConfirmation
-        $null = Show-Folder $script:folderPath
+        $deleted = Remove-CurrentTrack -SkipConfirmation:$SkipConfirmation
+        if ($deleted) { $null = Show-Folder $script:folderPath }
         return $true
     }
     if ($SkipConfirmation) { throw 'Background deletion requires the currently playing test fixture.' }
@@ -262,16 +265,15 @@ function Invoke-FolderDelete {
         [Windows.MessageBoxButton]::YesNo, [Windows.MessageBoxImage]::Warning,
         [Windows.MessageBoxResult]::No)
     if ($answer -ne [Windows.MessageBoxResult]::Yes) { return $true }
-    Close-Player $path
     try {
         [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($path,
             [Microsoft.VisualBasic.FileIO.UIOption]::OnlyErrorDialogs,
             [Microsoft.VisualBasic.FileIO.RecycleOption]::SendToRecycleBin)
+        Close-Player $path
+        Remove-PlaylistPath $path
         $null = Show-Folder $script:folderPath
-        Set-FolderPlaybackOrder
     } catch {
         Set-Status ('Delete failed: ' + $_.Exception.Message)
-        Set-PreloadWindow
         Publish-Diagnostics
     }
     return $true
@@ -354,9 +356,13 @@ function Publish-Diagnostics {
     try {
         $currentPath = Get-CurrentPlaybackPath
         $selectedEntry = if ($null -ne $script:folderView) { $script:folderView.SelectedItem } else { $null }
+        $failureMap = [ordered]@{}
+        foreach ($failurePath in $script:playerFailures.Keys) {
+            $failureMap[$failurePath] = $script:playerFailures[$failurePath]
+        }
         $state = [ordered]@{
-            ProcessId = $PID; CurrentIndex = $script:currentIndex; CurrentPath = $currentPath
-            PlaylistCount = $script:playlist.Count
+            ProcessId = $PID; CurrentIndex = $script:currentIndex; PlaylistSelectedIndex = $script:playlistControl.SelectedIndex; CurrentPath = $currentPath
+            PlaylistCount = $script:playlist.Count; PlaylistPaths = @($script:playlist)
             IsPaused = $script:isPaused
             PositionMilliseconds = if ($currentPath -and $script:players.ContainsKey($currentPath)) {
                 [Math]::Round($script:players[$currentPath].Position.TotalMilliseconds)
@@ -366,10 +372,29 @@ function Publish-Diagnostics {
                 [Math]::Round($script:players[$currentPath].NaturalDuration.TimeSpan.TotalMilliseconds)
             } else { 0 }
             CachedPlayerCount = $script:players.Count; CachedPaths = @($script:players.Keys)
+            PendingPlaybackCount = $script:pendingPlayback.Count; PendingPlaybackPaths = @($script:pendingPlayback.Keys)
+            PlayerHandlerCount = $script:playerHandlers.Count
+            RaceFixtureExpectedPositionMilliseconds = $script:raceFixtureExpectedPosition
+            RaceFixtureAppliedPositionMilliseconds = $script:raceFixtureAppliedPosition
+            CompletedPaths = @($script:completedPlayback.Keys)
+            PlayerFailureCount = $script:playerFailures.Count; FailureMap = $failureMap
             Status = $script:statusText.Text
             LastAutomationCommandId = $script:lastAutomationCommandId
             LastAutomationCommandDurationMilliseconds = $script:lastAutomationCommandDurationMilliseconds
+            LastAutomationCommandName = $script:lastAutomationCommandName
+            LastAutomationCommandBeforeIndex = $script:lastAutomationCommandBeforeIndex
+            LastAutomationCommandBeforePath = $script:lastAutomationCommandBeforePath
+            LastAutomationCommandBeforeIsPaused = $script:lastAutomationCommandBeforeIsPaused
+            LastAutomationCommandAfterIndex = $script:lastAutomationCommandAfterIndex
+            LastAutomationCommandAfterPath = $script:lastAutomationCommandAfterPath
+            LastAutomationCommandAfterIsPaused = $script:lastAutomationCommandAfterIsPaused
             FolderMode = $script:folderModeEnabled; FolderPath = $script:folderPath
+            FolderScanGeneration = $script:folderScanGeneration
+            FolderScanPending = $null -ne $script:folderScan -or $null -ne $script:folderScanPending -or $script:folderScanOrphans.Count -gt 0
+            FolderScanPath = if ($null -ne $script:folderScanPending) { $script:folderScanPending.Path }
+                elseif ($null -ne $script:folderScan) { $script:folderScan.Path } else { $null }
+            FolderSortGeneration = $script:folderSortGeneration
+            FolderSortPending = $null -ne $script:folderSortState -or $null -ne $script:folderSortPending -or $script:folderSortOrphans.Count -gt 0
             FolderItemCount = $script:folderEntries.Count
             FolderAudioCount = @($script:folderEntries | Where-Object { -not $_.IsFolder }).Count
             FolderSort = $script:folderSort; FolderDescending = $script:folderDescending
@@ -380,7 +405,16 @@ function Publish-Diagnostics {
             PositionSliderValue = [Math]::Round([double]$script:positionSlider.Value, 4)
             TimestampUtc = [DateTime]::UtcNow.ToString('o')
         }
-        [IO.File]::WriteAllText($DiagnosticsPath, ($state | ConvertTo-Json -Compress -Depth 3))
+        # Publish a complete snapshot in one rename so the harness never observes
+        # a half-written JSON document while the dispatcher is ticking.
+        $diagnosticTempPath = "$DiagnosticsPath.$PID.tmp"
+        $diagnosticBackupPath = "$DiagnosticsPath.$PID.bak"
+        [IO.File]::WriteAllText($diagnosticTempPath, ($state | ConvertTo-Json -Compress -Depth 3))
+        if ([IO.File]::Exists($DiagnosticsPath)) {
+            if ([IO.File]::Exists($diagnosticBackupPath)) { Remove-Item -LiteralPath $diagnosticBackupPath -Force }
+            [IO.File]::Replace($diagnosticTempPath, $DiagnosticsPath, $diagnosticBackupPath)
+            Remove-Item -LiteralPath $diagnosticBackupPath -Force -ErrorAction SilentlyContinue
+        } else { [IO.File]::Move($diagnosticTempPath, $DiagnosticsPath) }
     } catch { }
 }
 

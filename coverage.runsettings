@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RunSettings>
+  <!-- scripts/measure-coverage.ps1 replaces __ASSEMBLY__ in a private copy for
+       each test project.  This prevents referenced ClipPlayer assemblies from
+       being charged to the wrong project's coverage report. -->
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="XPlat Code Coverage">
+        <Configuration>
+          <Format>cobertura</Format>
+          <Include>[__ASSEMBLY__]*</Include>
+          <Exclude>[*.Tests]*</Exclude>
+          <ExcludeByFile>**/obj/**,**/*.g.cs,**/*.xaml</ExcludeByFile>
+          <SingleHit>false</SingleHit>
+          <UseSourceLink>false</UseSourceLink>
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+</RunSettings>

@@ -1,6 +1,6 @@
 # SAC-/WDAC-Testregeln für ClipPlayer
 
-Quelle: `C:\Projects\SACsolutions.md`, gelesen am 04.09.2026. Diese Kurzfassung ersetzt die Quelle nicht.
+Quelle: `C:\Projects\SACsolutions.md`, zuletzt gegengeprueft am 05.09.2026. Diese Kurzfassung ersetzt die Quelle nicht.
 
 - Hostseitiges SAC, Defender, WDAC, AppLocker und Execution Policy werden niemals geändert.
 - Ein unsigniertes GUI-Assembly kann trotz Microsoft-signiertem `dotnet.exe` blockiert werden. Kopieren, Umbenennen, Clean/Rebuild und Selbstsignieren sind keine Lösung.
@@ -10,6 +10,17 @@ Quelle: `C:\Projects\SACsolutions.md`, gelesen am 04.09.2026. Diese Kurzfassung 
 - Testausgabe wird über getrennte Dateien gelesen, nicht durch `Tee-Object` gepiped; der Prozess-Handle wird sofort gecached und der Prozessbaum hat ein hartes Timeout.
 
 Der Wrapper verändert keine Sicherheitsrichtlinie. Bei einem Block sind statische Build-, Struktur- und Zeilenprüfungen weiterhin zulässig; die Blockmeldung wird wahrheitsgemäß dokumentiert.
+
+## GitHub-Release und Mark-of-the-Web
+
+Das unterstützte GitHub-Artefakt ist source-only und enthält absichtlich keine
+EXE, DLL, MSI oder MSIX. Der gemessene SAC-Start gilt für lokal erzeugte Skriptdateien
+unter `RemoteSigned`. Browser-Downloads können Mark-of-the-Web tragen; deren
+Ablehnung ist eine Execution-Policy-/Herkunftsentscheidung und kein SAC-Fehler.
+`Unblock-File`, `ExecutionPolicy Bypass`, selbstsignierte Zertifikate und das
+Abschalten von Schutzfunktionen sind keine Workarounds. Für SAC-Systeme wird ein
+lokaler Checkout des getaggten Releases oder ein organisatorisch signierter bzw.
+freigegebener Verteilweg verwendet.
 
 ## Gemessener lokaler Skriptmodus
 

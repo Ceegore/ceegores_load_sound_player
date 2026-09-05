@@ -19,6 +19,7 @@ $commandPath = Join-Path $fixtureRoot 'command.txt'
 $stdoutPath = Join-Path $fixtureRoot 'stdout.log'
 $stderrPath = Join-Path $fixtureRoot 'stderr.log'
 $playerProcess = $null
+$playerStartTime = $null
 $startedAt = Get-Date
 
 function Wait-FormatState {
@@ -53,6 +54,7 @@ try {
         "-DiagnosticsPath `"$diagnostics`" -AutomationCommandPath `"$commandPath`" -BackgroundTest"
     $playerProcess = Start-Process -FilePath $hostExe -ArgumentList $argumentLine -PassThru `
         -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+    try { $null = $playerProcess.Handle; $playerProcess.Refresh(); $playerStartTime = $playerProcess.StartTime } catch { }
 
     $state = Wait-FormatState { param($value) $value.CurrentIndex -eq 0 -and
         $value.CurrentPath -like '*.wav' -and $value.PositionMilliseconds -gt 0 -and $value.DurationMilliseconds -gt 0 }
@@ -79,6 +81,8 @@ try {
     [IO.File]::WriteAllText($commandPath, '5|Close')
     $null = $playerProcess.WaitForExit(5000)
     if (-not $playerProcess.HasExited) { throw 'Installed player did not close gracefully.' }
+    $playerProcess.WaitForExit(); $playerProcess.Refresh()
+    if ($playerProcess.ExitCode -ne 0) { throw "Installed player exited with code $($playerProcess.ExitCode)." }
     $stderrText = if (Test-Path $stderrPath) { Get-Content $stderrPath -Raw } else { '' }
     if (-not [string]::IsNullOrWhiteSpace($stderrText)) { throw "Installed player stderr was not empty: $stderrText" }
     $events = @(Get-WinEvent -FilterHashtable @{
@@ -91,7 +95,13 @@ try {
 }
 finally {
     if ($null -ne $playerProcess -and -not $playerProcess.HasExited) {
-        Stop-Process -Id $playerProcess.Id -Force -ErrorAction SilentlyContinue
+        try {
+            $playerProcess.Refresh()
+            if ($null -ne $playerStartTime -and $playerProcess.StartTime -eq $playerStartTime) {
+                $playerProcess.Kill()
+                $playerProcess.WaitForExit(3000)
+            }
+        } catch { }
     }
     $resolved = [IO.Path]::GetFullPath($fixtureRoot)
     $tempPrefix = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
